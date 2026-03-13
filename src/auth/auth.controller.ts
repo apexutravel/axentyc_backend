@@ -1,9 +1,11 @@
-import { Controller, Post, Body, Get, UseGuards, Res, Req, HttpCode } from '@nestjs/common';
+import { Controller, Post, Body, Get, UseGuards, Res, Req, HttpCode, Param } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import type { Response, Request } from 'express';
 import { AuthService } from './auth.service';
+import { InvitationsService } from '../users/invitations.service';
 import { LoginDto } from './dto/login.dto';
 import { RegisterDto } from './dto/register.dto';
+import { AcceptInviteDto } from '../users/dto/accept-invite.dto';
 import { Public } from '../common/decorators/public.decorator';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { RefreshTokenGuard } from './guards/refresh-token.guard';
@@ -12,7 +14,10 @@ import { User } from '../users/entities/user.entity';
 @ApiTags('auth')
 @Controller('auth')
 export class AuthController {
-  constructor(private readonly authService: AuthService) {}
+  constructor(
+    private readonly authService: AuthService,
+    private readonly invitationsService: InvitationsService,
+  ) {}
 
   @Public()
   @Post('register')
@@ -76,6 +81,34 @@ export class AuthController {
     res.clearCookie('access_token');
     res.clearCookie('refresh_token');
     return { success: true };
+  }
+
+  @Public()
+  @Get('verify-invite/:token')
+  @ApiOperation({ summary: 'Verify invitation token' })
+  async verifyInvite(@Param('token') token: string) {
+    const invitation = await this.invitationsService.findByToken(token);
+    return {
+      valid: true,
+      email: invitation.email,
+      firstName: invitation.firstName,
+      lastName: invitation.lastName,
+      companyName: (invitation.tenantId as any).name,
+    };
+  }
+
+  @Public()
+  @Post('accept-invite')
+  @ApiOperation({ summary: 'Accept invitation and create user account' })
+  async acceptInvite(
+    @Body() acceptInviteDto: AcceptInviteDto,
+    @Res({ passthrough: true }) res: Response,
+  ) {
+    const { access_token, refresh_token, user } = await this.authService.acceptInvite(acceptInviteDto);
+    
+    this.setAuthCookies(res, access_token, refresh_token);
+    
+    return { user };
   }
 
   private setAuthCookies(res: Response, accessToken: string, refreshToken: string) {

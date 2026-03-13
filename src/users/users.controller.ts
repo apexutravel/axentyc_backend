@@ -11,15 +11,23 @@ import {
 } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { UsersService } from './users.service';
+import { InvitationsService } from './invitations.service';
 import { CreateUserDto } from './dto/create-user.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
+import { InviteUserDto } from './dto/invite-user.dto';
+import { ChangePasswordDto } from './dto/change-password.dto';
+import { ChangeRoleDto } from './dto/change-role.dto';
+import { CurrentUser } from '../common/decorators/current-user.decorator';
 
 @ApiTags('users')
 @ApiBearerAuth()
 @Controller('users')
 @UseInterceptors(ClassSerializerInterceptor)
 export class UsersController {
-  constructor(private readonly usersService: UsersService) {}
+  constructor(
+    private readonly usersService: UsersService,
+    private readonly invitationsService: InvitationsService,
+  ) {}
 
   @Post()
   @ApiOperation({ summary: 'Create a new user' })
@@ -28,9 +36,39 @@ export class UsersController {
   }
 
   @Get()
-  @ApiOperation({ summary: 'Get all users' })
-  findAll() {
-    return this.usersService.findAll();
+  @ApiOperation({ summary: 'Get all users in tenant' })
+  findAll(@CurrentUser() user: any) {
+    return this.usersService.findByTenant(user.tenantId);
+  }
+
+  @Get('invitations')
+  @ApiOperation({ summary: 'Get all invitations for tenant' })
+  getInvitations(@CurrentUser() user: any) {
+    return this.invitationsService.findAllByTenant(user.tenantId);
+  }
+
+  @Post('invite')
+  @ApiOperation({ summary: 'Invite a new user to the tenant' })
+  invite(@CurrentUser() user: any, @Body() inviteDto: InviteUserDto) {
+    return this.invitationsService.create(user.tenantId, user.sub, inviteDto);
+  }
+
+  @Delete('invitations/:id')
+  @ApiOperation({ summary: 'Cancel an invitation' })
+  cancelInvitation(@CurrentUser() user: any, @Param('id') id: string) {
+    return this.invitationsService.cancel(user.tenantId, id);
+  }
+
+  @Post(':id/change-password')
+  @ApiOperation({ summary: 'Change user password (admin only)' })
+  changePassword(@Param('id') id: string, @Body() dto: ChangePasswordDto) {
+    return this.usersService.changePassword(id, dto.newPassword);
+  }
+
+  @Patch(':id/role')
+  @ApiOperation({ summary: 'Change user role (admin only)' })
+  changeRole(@CurrentUser() user: any, @Param('id') id: string, @Body() dto: ChangeRoleDto) {
+    return this.usersService.changeRole(id, user.tenantId, dto.role);
   }
 
   @Get(':id')

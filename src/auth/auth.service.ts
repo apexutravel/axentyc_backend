@@ -1,11 +1,13 @@
-import { Injectable, UnauthorizedException } from '@nestjs/common';
+import { Injectable, UnauthorizedException, BadRequestException } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
 import * as bcrypt from 'bcrypt';
 import { UsersService } from '../users/users.service';
 import { TenantsService } from '../tenants/tenants.service';
+import { InvitationsService } from '../users/invitations.service';
 import { LoginDto } from './dto/login.dto';
 import { RegisterDto } from './dto/register.dto';
+import { AcceptInviteDto } from '../users/dto/accept-invite.dto';
 import { UserRole } from '../users/entities/user.entity';
 
 @Injectable()
@@ -13,6 +15,7 @@ export class AuthService {
   constructor(
     private usersService: UsersService,
     private tenantsService: TenantsService,
+    private invitationsService: InvitationsService,
     private jwtService: JwtService,
     private configService: ConfigService,
   ) {}
@@ -113,6 +116,50 @@ export class AuthService {
         secret: refreshTokenSecret,
         expiresIn: '7d',
       } as any),
+    };
+  }
+
+  async acceptInvite(acceptInviteDto: AcceptInviteDto) {
+    const invitation = await this.invitationsService.findByToken(acceptInviteDto.token);
+
+    const existingUser = await this.usersService.findByEmail(invitation.email);
+    if (existingUser) {
+      throw new BadRequestException('User with this email already exists');
+    }
+
+    const user = await this.usersService.create({
+      email: invitation.email,
+      password: acceptInviteDto.password,
+      firstName: invitation.firstName,
+      lastName: invitation.lastName,
+      tenantId: (invitation.tenantId as any)._id?.toString() || invitation.tenantId.toString(),
+      role: invitation.role as UserRole,
+    });
+
+    await this.invitationsService.markAsAccepted(
+      (invitation as any)._id.toString(),
+      (user as any)._id.toString(),
+    );
+
+    const payload = {
+      email: user.email,
+      sub: (user as any)._id,
+      tenantId: user.tenantId,
+      role: user.role,
+    };
+
+    const tokens = this.generateTokens(payload);
+
+    return {
+      ...tokens,
+      user: {
+        id: (user as any)._id,
+        email: user.email,
+        firstName: user.firstName,
+        lastName: user.lastName,
+        role: user.role,
+        tenantId: user.tenantId,
+      },
     };
   }
 

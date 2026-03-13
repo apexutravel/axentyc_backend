@@ -77,4 +77,47 @@ export class UsersService {
       throw new NotFoundException(`User with ID ${id} not found`);
     }
   }
+
+  async findByTenant(tenantId: string): Promise<User[]> {
+    return this.userModel
+      .find({ tenantId: new Types.ObjectId(tenantId) })
+      .select('-password')
+      .sort({ createdAt: -1 })
+      .exec();
+  }
+
+  async changePassword(userId: string, newPassword: string): Promise<User> {
+    const hashedPassword = await bcrypt.hash(newPassword, 10);
+    
+    const user = await this.userModel
+      .findByIdAndUpdate(
+        userId,
+        { password: hashedPassword },
+        { returnDocument: 'after' },
+      )
+      .exec();
+
+    if (!user) {
+      throw new NotFoundException(`User with ID ${userId} not found`);
+    }
+
+    return user;
+  }
+
+  async changeRole(userId: string, tenantId: string, role: string): Promise<User> {
+    const user = await this.userModel
+      .findOneAndUpdate(
+        { _id: userId, tenantId: new Types.ObjectId(tenantId) },
+        { role },
+        { returnDocument: 'after' },
+      )
+      .select('-password')
+      .exec();
+
+    if (!user) {
+      throw new NotFoundException(`User with ID ${userId} not found in this tenant`);
+    }
+
+    return user;
+  }
 }
