@@ -1,0 +1,23 @@
+version: '3.8'
+
+services:
+  mongodb:
+    image: mongo:7
+    container_name: cconehub-mongodb
+    restart: unless-stopped
+    ports:
+      - "27017:27017"
+    environment:
+      MONGO_INITDB_DATABASE: cconehub
+    volumes:
+      - mongodb_data:/data/db
+    networks:
+      - cconehub-network
+
+networks:
+  cconehub-network:
+    driver: bridge
+
+volumes:
+  mongodb_data:
+    driver: local
