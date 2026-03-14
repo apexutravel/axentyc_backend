@@ -167,6 +167,13 @@ export class ChatWidgetService {
           },
         },
       );
+
+      // Notify admin about new conversation
+      this.eventsGateway.emitToTenant(
+        config.tenantId.toString(),
+        'conversation.created',
+        conversation,
+      );
     }
 
     const messageDoc = await this.conversationsService.addMessage(

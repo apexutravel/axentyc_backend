@@ -709,11 +709,75 @@
         }
       }
       
-      @media (max-width: 480px) {
+      @media (max-width: 768px) {
+        .cconehub-widget {
+          bottom: 0;
+          right: 0;
+          left: 0;
+        }
+        
+        .cconehub-button {
+          position: fixed;
+          bottom: 20px;
+          right: 20px;
+          width: 56px;
+          height: 56px;
+        }
+        
         .cconehub-chat-window {
-          width: calc(100vw - 40px);
-          height: calc(100vh - 40px);
-          max-height: calc(100vh - 40px);
+          position: fixed;
+          top: 0;
+          left: 0;
+          right: 0;
+          bottom: 0;
+          width: 100%;
+          height: 100%;
+          max-height: 100vh;
+          border-radius: 0;
+          margin: 0;
+        }
+        
+        .cconehub-header {
+          padding: 16px 20px;
+          padding-top: max(16px, env(safe-area-inset-top));
+        }
+        
+        .cconehub-messages {
+          padding: 16px 12px;
+          padding-bottom: max(16px, env(safe-area-inset-bottom));
+        }
+        
+        .cconehub-input-container {
+          padding: 16px;
+          padding-bottom: max(16px, env(safe-area-inset-bottom));
+        }
+        
+        .cconehub-input {
+          font-size: 16px;
+          padding: 14px 18px;
+        }
+        
+        .cconehub-send-btn {
+          width: 48px;
+          height: 48px;
+          flex-shrink: 0;
+        }
+        
+        .cconehub-message-content {
+          max-width: 85%;
+        }
+        
+        .cconehub-avatar {
+          width: 40px;
+          height: 40px;
+        }
+        
+        .cconehub-title {
+          font-size: 15px;
+        }
+        
+        .cconehub-subtitle {
+          font-size: 11px;
         }
       }
       
