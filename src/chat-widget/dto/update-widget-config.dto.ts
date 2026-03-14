@@ -55,6 +55,11 @@ export class UpdateWidgetConfigDto {
   @ApiPropertyOptional()
   @IsOptional()
   @IsBoolean()
+  showOnLanding?: boolean;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsBoolean()
   collectEmail?: boolean;
 
   @ApiPropertyOptional()
