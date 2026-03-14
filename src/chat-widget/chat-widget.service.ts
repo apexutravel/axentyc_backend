@@ -1,5 +1,6 @@
 import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
+import { ConfigService } from '@nestjs/config';
 import { Model, Types } from 'mongoose';
 import { randomBytes } from 'crypto';
 import { WidgetConfig, WidgetConfigDocument } from './entities/widget-config.entity';
@@ -18,6 +19,7 @@ export class ChatWidgetService {
     private widgetConfigModel: Model<WidgetConfigDocument>,
     private conversationsService: ConversationsService,
     private eventsGateway: EventsGateway,
+    private configService: ConfigService,
   ) {}
 
   async createWidgetConfig(
@@ -299,8 +301,12 @@ export class ChatWidgetService {
   }
 
   getWidgetScript(widgetId: string): string {
-    const baseUrl = process.env.API_URL || 'http://localhost:3001';
-    const apiPrefix = process.env.API_PREFIX || 'api/v1';
+    const port = this.configService.get<number>('PORT') || 3001;
+    const apiPrefix = this.configService.get<string>('API_PREFIX') || 'api/v1';
+    const apiUrl = this.configService.get<string>('API_URL');
+    
+    // Construir baseUrl dinámicamente
+    const baseUrl = apiUrl || `http://localhost:${port}`;
     
     return `
 <!-- CconeHub Chat Widget -->
