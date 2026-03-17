@@ -112,6 +112,7 @@ export class FacebookController {
       exists: true,
       appId: config.appId,
       verifyToken: config.verifyToken,
+      webhookUrl: `${this.configService.get('API_URL')}/${this.configService.get('API_PREFIX') || 'api/v1'}/webhook/facebook`,
     };
   }
 

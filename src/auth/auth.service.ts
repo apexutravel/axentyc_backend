@@ -110,7 +110,7 @@ export class AuthService {
     return {
       access_token: this.jwtService.sign(payload, {
         secret: accessTokenSecret,
-        expiresIn: '15m',
+        expiresIn: '1h',
       } as any),
       refresh_token: this.jwtService.sign(payload, {
         secret: refreshTokenSecret,
@@ -182,7 +182,7 @@ export class AuthService {
     return {
       access_token: this.jwtService.sign(payload, {
         secret: accessTokenSecret,
-        expiresIn: '15m',
+        expiresIn: '1h',
       } as any),
     };
   }

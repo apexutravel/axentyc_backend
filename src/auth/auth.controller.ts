@@ -48,6 +48,7 @@ export class AuthController {
     return { user };
   }
 
+  @Public()
   @Post('refresh')
   @UseGuards(RefreshTokenGuard)
   @ApiOperation({ summary: 'Refresh access token' })
@@ -60,8 +61,8 @@ export class AuthController {
     res.cookie('access_token', access_token, {
       httpOnly: true,
       secure: process.env.NODE_ENV === 'production',
-      sameSite: 'strict',
-      maxAge: 15 * 60 * 1000,
+      sameSite: 'lax',
+      maxAge: 60 * 60 * 1000, // 1 hour
     });
     
     return { success: true };
@@ -117,15 +118,15 @@ export class AuthController {
     res.cookie('access_token', accessToken, {
       httpOnly: true,
       secure: isProduction,
-      sameSite: 'strict',
-      maxAge: 15 * 60 * 1000,
+      sameSite: 'lax',
+      maxAge: 60 * 60 * 1000, // 1 hour
     });
 
     res.cookie('refresh_token', refreshToken, {
       httpOnly: true,
       secure: isProduction,
-      sameSite: 'strict',
-      maxAge: 7 * 24 * 60 * 60 * 1000,
+      sameSite: 'lax',
+      maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days
     });
   }
 }
