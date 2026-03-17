@@ -120,4 +120,36 @@ export class UsersService {
 
     return user;
   }
+
+  async addFCMToken(userId: string, token: string): Promise<User> {
+    const user = await this.userModel
+      .findByIdAndUpdate(
+        userId,
+        { $addToSet: { fcmTokens: token } },
+        { returnDocument: 'after' },
+      )
+      .exec();
+
+    if (!user) {
+      throw new NotFoundException(`User with ID ${userId} not found`);
+    }
+
+    return user;
+  }
+
+  async removeFCMToken(userId: string, token: string): Promise<User> {
+    const user = await this.userModel
+      .findByIdAndUpdate(
+        userId,
+        { $pull: { fcmTokens: token } },
+        { returnDocument: 'after' },
+      )
+      .exec();
+
+    if (!user) {
+      throw new NotFoundException(`User with ID ${userId} not found`);
+    }
+
+    return user;
+  }
 }

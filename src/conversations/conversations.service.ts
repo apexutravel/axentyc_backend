@@ -1,16 +1,19 @@
 import {
   Injectable,
   NotFoundException,
+  Inject,
+  forwardRef,
 } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 import { Conversation, ConversationDocument, ConversationStatus } from './entities/conversation.entity';
-import { Message, MessageDocument, MessageDirection, MessageStatus } from './entities/message.entity';
+import { Message, MessageDocument, MessageDirection, MessageStatus, MessageType } from './entities/message.entity';
 import { CreateConversationDto } from './dto/create-conversation.dto';
 import { UpdateConversationDto } from './dto/update-conversation.dto';
 import { SendMessageDto } from './dto/send-message.dto';
 import { Contact, ContactDocument, ContactSource } from '../crm/entities/contact.entity';
 import { EventsGateway } from '../events/events.gateway';
+import { FacebookService } from '../facebook/facebook.service';
 
 @Injectable()
 export class ConversationsService {
@@ -21,7 +24,10 @@ export class ConversationsService {
     private messageModel: Model<MessageDocument>,
     @InjectModel(Contact.name)
     private contactModel: Model<ContactDocument>,
+    @Inject(forwardRef(() => EventsGateway))
     private eventsGateway: EventsGateway,
+    @Inject(forwardRef(() => FacebookService))
+    private facebookService: FacebookService,
   ) {}
 
   async create(tenantId: string, dto: CreateConversationDto): Promise<Conversation> {
@@ -31,7 +37,16 @@ export class ConversationsService {
       contactId: new Types.ObjectId(dto.contactId),
       assignedTo: dto.assignedTo ? new Types.ObjectId(dto.assignedTo) : undefined,
     });
-    return conversation.save();
+    const saved = await conversation.save();
+    const populated = await this.conversationModel
+      .findById(saved._id)
+      .populate('contactId')
+      .populate('assignedTo', 'firstName lastName email')
+      .exec();
+    if (!populated) {
+      throw new Error('Failed to populate conversation after creation');
+    }
+    return populated;
   }
 
   async findAll(tenantId: string, filters?: {
@@ -91,6 +106,20 @@ export class ConversationsService {
     return conversation;
   }
 
+  private ensureAbsoluteMediaUrl(message: any): any {
+    if (!message.media?.url) return message;
+    if (message.media.url.startsWith('http')) return message;
+    
+    const baseUrl = process.env.APP_URL || process.env.BACKEND_URL || 'http://localhost:3001';
+    return {
+      ...message,
+      media: {
+        ...message.media,
+        url: `${baseUrl}${message.media.url}`,
+      },
+    };
+  }
+
   async sendMessage(
     tenantId: string,
     conversationId: string,
@@ -122,11 +151,24 @@ export class ConversationsService {
       this.eventsGateway.emitToConversation(conversationId, 'message.new', savedMessage);
 
       if (conv.metadata?.visitorId && conv.metadata?.widgetId) {
+        const messageForWidget = this.ensureAbsoluteMediaUrl(savedMessage.toObject());
         this.eventsGateway.emitWidgetMessage(
           conv.metadata.widgetId,
           conv.metadata.visitorId,
-          savedMessage,
+          messageForWidget,
         );
+      }
+
+      // Send via Facebook Graph API if it's a Facebook conversation
+      if (conv.channel === 'facebook' && conv.metadata?.externalId) {
+        this.facebookService.sendMessage(
+          tenantId,
+          conversationId,
+          dto.content,
+          dto.media ? { url: dto.media.url, mimeType: dto.media.mimeType } : undefined,
+        ).catch((err) => {
+          console.error('Failed to send Facebook message:', err);
+        });
       }
     }
 
@@ -175,6 +217,7 @@ export class ConversationsService {
     const conversation = await this.conversationModel.findOneAndUpdate(
       { _id: conversationId, tenantId: new Types.ObjectId(tenantId) },
       { unreadCount: 0 },
+      { returnDocument: 'after' },
     );
 
     const result = await this.messageModel.updateMany(
@@ -195,6 +238,11 @@ export class ConversationsService {
         conversationId,
         MessageStatus.READ,
       );
+    }
+
+    // Emit conversation.updated event to update unread counts in real-time
+    if (conversation) {
+      this.eventsGateway.emitConversationUpdated(tenantId, conversation);
     }
   }
 
@@ -235,7 +283,12 @@ export class ConversationsService {
         tenantId: new Types.ObjectId(tenantId),
         'metadata.visitorId': visitorId,
       })
+      .populate('contactId')
       .exec();
+  }
+
+  async getContactById(contactId: string): Promise<Contact | null> {
+    return this.contactModel.findById(contactId).exec();
   }
 
   async updateConversationFields(conversationId: string, tenantId: string, data: Record<string, any>): Promise<Conversation | null> {
@@ -305,6 +358,13 @@ export class ConversationsService {
       senderName?: string;
       senderId?: string;
       metadata?: any;
+      type?: MessageType | string;
+      media?: {
+        url: string;
+        mimeType?: string;
+        fileName?: string;
+        fileSize?: number;
+      };
     },
   ): Promise<Message> {
     const conversation = await this.conversationModel.findById(conversationId);
@@ -317,8 +377,9 @@ export class ConversationsService {
       tenantId: conversation.tenantId,
       conversationId: new Types.ObjectId(conversationId),
       direction: messageData.direction,
-      type: 'text',
+      type: (messageData.type as any) || 'text',
       content: messageData.content,
+      media: messageData.media,
       senderName: messageData.senderName,
       senderId: messageData.senderId ? new Types.ObjectId(messageData.senderId) : undefined,
       status: messageData.direction === MessageDirection.INBOUND ? MessageStatus.DELIVERED : MessageStatus.SENT,
@@ -327,10 +388,16 @@ export class ConversationsService {
 
     const savedMessage = await message.save();
 
+    // Check if conversation is being actively viewed by an admin
+    const isBeingViewed = this.eventsGateway.isConversationBeingViewed(conversationId);
+    
+    // Only increment unreadCount if message is INBOUND and NOT being actively viewed
+    const shouldIncrementUnread = messageData.direction === MessageDirection.INBOUND && !isBeingViewed;
+
     await this.conversationModel.findByIdAndUpdate(conversationId, {
       lastMessage: messageData.content,
       lastMessageAt: new Date(),
-      $inc: { unreadCount: messageData.direction === MessageDirection.INBOUND ? 1 : 0 },
+      $inc: { unreadCount: shouldIncrementUnread ? 1 : 0 },
     });
 
     return savedMessage;

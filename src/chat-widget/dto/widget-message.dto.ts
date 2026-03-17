@@ -1,4 +1,4 @@
-import { IsString, IsNotEmpty, IsOptional, IsEmail } from 'class-validator';
+import { IsString, IsNotEmpty, IsOptional, IsEmail, IsObject } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 
 export class WidgetMessageDto {
@@ -31,6 +31,22 @@ export class WidgetMessageDto {
   @IsOptional()
   @IsString()
   visitorPhone?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  type?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsObject()
+  media?: {
+    url: string;
+    mimeType?: string;
+    fileName?: string;
+    fileSize?: number;
+    thumbnailUrl?: string;
+  };
 
   @ApiPropertyOptional()
   @IsOptional()

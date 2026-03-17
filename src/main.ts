@@ -14,6 +14,9 @@ async function bootstrap() {
   app.use(cookieParser());
 
   app.useStaticAssets(join(__dirname, '..', 'public'));
+  app.useStaticAssets(join(__dirname, '..', 'uploads'), {
+    prefix: '/uploads/',
+  });
 
   const corsOrigin = configService.get('CORS_ORIGIN') || 'http://localhost:3000';
   app.enableCors({

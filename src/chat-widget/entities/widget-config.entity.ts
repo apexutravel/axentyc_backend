@@ -41,9 +41,6 @@ export class WidgetConfig {
   @Prop({ type: Boolean, default: true })
   showBranding: boolean;
 
-  @Prop({ type: Boolean, default: false })
-  showOnLanding: boolean;
-
   @Prop({ type: Boolean, default: true })
   collectEmail: boolean;
 

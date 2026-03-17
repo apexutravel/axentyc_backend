@@ -10,6 +10,8 @@ import { ConversationsService } from '../conversations/conversations.service';
 import { ConversationChannel } from '../conversations/entities/conversation.entity';
 import { MessageDirection } from '../conversations/entities/message.entity';
 import { EventsGateway } from '../events/events.gateway';
+import { FirebaseAdminService } from '../firebase/firebase-admin.service';
+import { UsersService } from '../users/users.service';
 import { extractContactInfo, hasExtractedInfo, extractSubject } from '../common/utils/contact-info-extractor';
 
 @Injectable()
@@ -20,6 +22,8 @@ export class ChatWidgetService {
     private conversationsService: ConversationsService,
     private eventsGateway: EventsGateway,
     private configService: ConfigService,
+    private firebaseAdminService: FirebaseAdminService,
+    private usersService: UsersService,
   ) {}
 
   async createWidgetConfig(
@@ -132,6 +136,14 @@ export class ChatWidgetService {
     widgetId: string,
     message: string,
     visitorId: string,
+    type?: string,
+    media?: {
+      url: string;
+      mimeType?: string;
+      fileName?: string;
+      fileSize?: number;
+      thumbnailUrl?: string;
+    },
     visitorData?: {
       name?: string;
       email?: string;
@@ -151,6 +163,7 @@ export class ChatWidgetService {
     );
 
     if (!conversation) {
+      // Always create contact - simpler and more reliable
       const contact = await this.conversationsService.createWidgetContact(
         config.tenantId.toString(),
         visitorId,
@@ -183,6 +196,8 @@ export class ChatWidgetService {
       {
         content: message,
         direction: MessageDirection.INBOUND,
+        type: type as any,
+        media,
         senderName: visitorData?.name || 'Visitor',
         metadata: {
           widgetId,
@@ -193,14 +208,42 @@ export class ChatWidgetService {
 
     const conversationId = (conversation as any)._id.toString();
 
+    // Get contact info for notification - contactId might be populated or just an ID
+    let contact: any = null;
+    if (conversation.contactId) {
+      // Check if already populated
+      if (typeof conversation.contactId === 'object' && (conversation.contactId as any).name) {
+        contact = conversation.contactId;
+      } else {
+        // Fetch contact if only ID is present
+        try {
+          contact = await this.conversationsService.getContactById((conversation.contactId as any).toString());
+        } catch (error) {
+          console.error('[ChatWidget] Failed to fetch contact:', error);
+          contact = null;
+        }
+      }
+    }
+
     this.eventsGateway.emitMessageReceived(
       config.tenantId.toString(),
       conversationId,
       messageDoc,
+      contact,
     );
     this.eventsGateway.emitAdminMessage(conversationId, {
       conversationId,
       message: messageDoc,
+    });
+
+    // Send FCM push notifications to all users in tenant
+    this.sendPushNotificationsToTenant(
+      config.tenantId.toString(),
+      conversationId,
+      visitorData?.name || 'Visitante',
+      message,
+    ).catch((error) => {
+      console.error('[FCM] Failed to send push notifications:', error);
     });
 
     // Auto-detect contact info (email, phone, name) from inbound message
@@ -293,6 +336,42 @@ export class ChatWidgetService {
           tags: convUpdate.tags || conversation.tags,
         });
       }
+    }
+  }
+
+  private async sendPushNotificationsToTenant(
+    tenantId: string,
+    conversationId: string,
+    senderName: string,
+    messageContent: string,
+  ): Promise<void> {
+    try {
+      const users = await this.usersService.findByTenant(tenantId);
+      const allTokens: string[] = [];
+
+      for (const user of users) {
+        if (user.fcmTokens && user.fcmTokens.length > 0) {
+          allTokens.push(...user.fcmTokens);
+        }
+      }
+
+      if (allTokens.length === 0) {
+        return;
+      }
+
+      await this.firebaseAdminService.sendToMultipleDevices(
+        allTokens,
+        'Nuevo mensaje de chat',
+        `${senderName}: ${messageContent.substring(0, 100)}`,
+        {
+          conversationId,
+          type: 'chat_message',
+          senderName,
+        },
+      );
+    } catch (error) {
+      console.error('[FCM] Error sending push notifications:', error);
+      throw error;
     }
   }
 

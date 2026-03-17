@@ -3,6 +3,11 @@ import { ApiPropertyOptional } from '@nestjs/swagger';
 import { ConversationStatus } from '../entities/conversation.entity';
 
 export class UpdateConversationDto {
+  @ApiPropertyOptional()
+  @IsString()
+  @IsOptional()
+  contactId?: string;
+
   @ApiPropertyOptional({ enum: ConversationStatus })
   @IsEnum(ConversationStatus)
   @IsOptional()
@@ -27,4 +32,20 @@ export class UpdateConversationDto {
   @IsNumber()
   @IsOptional()
   priority?: number;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  metadata?: {
+    externalId?: string;
+    pageId?: string;
+    threadId?: string;
+    widgetId?: string;
+    visitorId?: string;
+    isGuest?: boolean;
+    visitorData?: {
+      name?: string;
+      email?: string;
+      phone?: string;
+    };
+  };
 }

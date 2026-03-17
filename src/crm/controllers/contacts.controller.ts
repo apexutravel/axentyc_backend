@@ -52,4 +52,10 @@ export class ContactsController {
   remove(@CurrentUser() user: any, @Param('id') id: string) {
     return this.contactsService.remove(user.tenantId, id);
   }
+
+  @Post('bulk-delete')
+  @ApiOperation({ summary: 'Delete multiple contacts' })
+  bulkDelete(@CurrentUser() user: any, @Body() body: { ids: string[] }) {
+    return this.contactsService.bulkDelete(user.tenantId, body.ids);
+  }
 }

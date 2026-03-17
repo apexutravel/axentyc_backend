@@ -3,10 +3,10 @@ import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { ConversationChannel } from '../entities/conversation.entity';
 
 export class CreateConversationDto {
-  @ApiProperty({ example: '60d5f484f1a2c8b1f8e4e1a2' })
+  @ApiPropertyOptional({ example: '60d5f484f1a2c8b1f8e4e1a2' })
   @IsString()
-  @IsNotEmpty()
-  contactId: string;
+  @IsOptional()
+  contactId?: string;
 
   @ApiProperty({ enum: ConversationChannel })
   @IsEnum(ConversationChannel)
@@ -36,5 +36,11 @@ export class CreateConversationDto {
     threadId?: string;
     widgetId?: string;
     visitorId?: string;
+    isGuest?: boolean;
+    visitorData?: {
+      name?: string;
+      email?: string;
+      phone?: string;
+    };
   };
 }

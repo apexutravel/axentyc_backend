@@ -88,4 +88,18 @@ export class UsersController {
   remove(@Param('id') id: string) {
     return this.usersService.remove(id);
   }
+
+  @Post('fcm-token')
+  @ApiOperation({ summary: 'Register FCM token for push notifications' })
+  async registerFCMToken(@CurrentUser() user: any, @Body('token') token: string) {
+    await this.usersService.addFCMToken(user.sub, token);
+    return { success: true };
+  }
+
+  @Delete('fcm-token')
+  @ApiOperation({ summary: 'Unregister FCM token' })
+  async unregisterFCMToken(@CurrentUser() user: any, @Body('token') token: string) {
+    await this.usersService.removeFCMToken(user.sub, token);
+    return { success: true };
+  }
 }

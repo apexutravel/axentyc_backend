@@ -9,6 +9,7 @@ export enum ContactSource {
   WHATSAPP = 'whatsapp',
   TIKTOK = 'tiktok',
   WEB_CHAT = 'web_chat',
+  EMAIL = 'email',
   MANUAL = 'manual',
   IMPORT = 'import',
 }

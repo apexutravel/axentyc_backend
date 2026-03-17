@@ -1,5 +1,6 @@
-import { Controller, Get, Post, Put, Body, Param, Query } from '@nestjs/common';
+import { Controller, Get, Post, Put, Body, Param, Query, Req } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
+import type { Request } from 'express';
 import { ChatWidgetService } from './chat-widget.service';
 import { UpdateWidgetConfigDto } from './dto/update-widget-config.dto';
 import { WidgetMessageDto } from './dto/widget-message.dto';
@@ -93,6 +94,8 @@ export class ChatWidgetController {
       messageDto.widgetId,
       messageDto.message,
       messageDto.visitorId || `visitor_${Date.now()}`,
+      messageDto.type,
+      messageDto.media,
       {
         name: messageDto.visitorName,
         email: messageDto.visitorEmail,
@@ -105,11 +108,28 @@ export class ChatWidgetController {
   @Public()
   @Get('messages/:widgetId')
   @ApiOperation({ summary: 'Get widget conversation messages' })
-  getMessages(
+  async getMessages(
     @Param('widgetId') widgetId: string,
     @Query('visitorId') visitorId: string,
+    @Req() req: Request,
   ) {
-    return this.chatWidgetService.getWidgetConversationMessages(widgetId, visitorId);
+    const messages = await this.chatWidgetService.getWidgetConversationMessages(widgetId, visitorId);
+    const host = (req.get('x-forwarded-host') || req.get('host')) as string;
+    const protocol = ((req.get('x-forwarded-proto') as string) || req.protocol || 'http') as string;
+    const baseUrl = host ? `${protocol}://${host}` : '';
+
+    return messages.map(msg => {
+      if (msg.media?.url && !msg.media.url.startsWith('http')) {
+        return {
+          ...msg,
+          media: {
+            ...msg.media,
+            url: `${baseUrl}${msg.media.url}`,
+          },
+        };
+      }
+      return msg;
+    });
   }
 
   @Public()

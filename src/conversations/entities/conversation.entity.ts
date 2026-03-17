@@ -27,8 +27,8 @@ export class Conversation {
   @Prop({ type: Types.ObjectId, ref: 'Tenant', required: true, index: true })
   tenantId: Types.ObjectId;
 
-  @Prop({ type: Types.ObjectId, ref: 'Contact', required: true })
-  contactId: Types.ObjectId;
+  @Prop({ type: Types.ObjectId, ref: 'Contact' })
+  contactId?: Types.ObjectId;
 
   @Prop({ type: String, enum: ConversationChannel, required: true })
   channel: ConversationChannel;
@@ -61,6 +61,12 @@ export class Conversation {
     threadId?: string;
     widgetId?: string;
     visitorId?: string;
+    isGuest?: boolean;
+    visitorData?: {
+      name?: string;
+      email?: string;
+      phone?: string;
+    };
   };
 
   @Prop({ type: Boolean, default: false })

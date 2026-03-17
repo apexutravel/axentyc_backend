@@ -68,4 +68,14 @@ export class ContactsService {
       throw new NotFoundException(`Contact with ID ${id} not found`);
     }
   }
+
+  async bulkDelete(tenantId: string, ids: string[]): Promise<{ deletedCount: number }> {
+    const result = await this.contactModel
+      .deleteMany({
+        _id: { $in: ids.map(id => new Types.ObjectId(id)) },
+        tenantId: new Types.ObjectId(tenantId),
+      })
+      .exec();
+    return { deletedCount: result.deletedCount };
+  }
 }

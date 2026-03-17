@@ -13,6 +13,10 @@ import { AutomationsModule } from './automations/automations.module';
 import { IntegrationsModule } from './integrations/integrations.module';
 import { EventsModule } from './events/events.module';
 import { ChatWidgetModule } from './chat-widget/chat-widget.module';
+import { FirebaseAdminModule } from './firebase/firebase-admin.module';
+import { UploadModule } from './upload/upload.module';
+import { EmailsModule } from './emails/emails.module';
+import { FacebookModule } from './facebook/facebook.module';
 import { JwtAuthGuard } from './auth/guards/jwt-auth.guard';
 import { RolesGuard } from './common/guards/roles.guard';
 import { AllExceptionsFilter } from './common/filters/http-exception.filter';
@@ -43,6 +47,10 @@ import jwtConfig from './config/jwt.config';
     IntegrationsModule,
     EventsModule,
     ChatWidgetModule,
+    FirebaseAdminModule,
+    UploadModule,
+    EmailsModule,
+    FacebookModule,
   ],
   controllers: [AppController],
   providers: [

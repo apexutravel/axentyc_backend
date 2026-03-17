@@ -25,6 +25,12 @@ export class LeadsController {
     return this.leadsService.create(user.tenantId, createLeadDto);
   }
 
+  @Post('bulk-delete')
+  @ApiOperation({ summary: 'Delete multiple leads' })
+  bulkDelete(@CurrentUser() user: any, @Body() body: { ids: string[] }) {
+    return this.leadsService.bulkDelete(user.tenantId, body.ids);
+  }
+
   @Get()
   @ApiOperation({ summary: 'Get all leads for tenant' })
   findAll(@CurrentUser() user: any) {
@@ -51,5 +57,11 @@ export class LeadsController {
   @ApiOperation({ summary: 'Delete a lead' })
   remove(@CurrentUser() user: any, @Param('id') id: string) {
     return this.leadsService.remove(user.tenantId, id);
+  }
+
+  @Post(':id/convert')
+  @ApiOperation({ summary: 'Convert lead to deal' })
+  convertToDeal(@CurrentUser() user: any, @Param('id') id: string) {
+    return this.leadsService.convertToDeal(user.tenantId, id);
   }
 }

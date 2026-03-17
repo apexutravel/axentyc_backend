@@ -42,7 +42,6 @@ export class Tenant {
     timezone?: string;
     language?: string;
     currency?: string;
-    widgetEnabledOnLanding?: boolean;
     businessHours?: {
       enabled: boolean;
       schedule: Record<string, { start: string; end: string }>;
