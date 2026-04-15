@@ -14,7 +14,7 @@ export class FacebookConfig {
   @Prop({ required: true })
   appSecret: string;
 
-  @Prop({ default: 'cconehub_fb_verify' })
+  @Prop({ default: 'axentyc_fb_verify' })
   verifyToken: string;
 
   @Prop({ default: true })

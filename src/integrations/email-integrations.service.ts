@@ -18,7 +18,7 @@ export class EmailIntegrationsService {
   ) {}
 
   private getKey(): Buffer {
-    const secret = this.configService.get<string>('EMAIL_SECRET_KEY') || 'cconehub_dev_secret_key';
+    const secret = this.configService.get<string>('EMAIL_SECRET_KEY') || 'axentyc_dev_secret_key';
     // Derive a 32-byte key using SHA-256 of the secret
     return createHash('sha256').update(secret).digest();
   }

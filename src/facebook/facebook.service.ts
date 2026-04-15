@@ -69,7 +69,7 @@ export class FacebookService {
         tenantId: new Types.ObjectId(tenantId),
         appId,
         appSecret,
-        verifyToken: verifyToken || 'cconehub_fb_verify',
+        verifyToken: verifyToken || 'axentyc_fb_verify',
         isActive: true,
       },
       { upsert: true, new: true },

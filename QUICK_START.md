@@ -125,7 +125,7 @@ docker start mongodb
 
 ```bash
 # Verificar conexión a MongoDB
-mongosh mongodb://localhost:27017/cconehub
+mongosh mongodb://localhost:27017/axentyc
 ```
 
 ### Puerto 3001 ya en uso

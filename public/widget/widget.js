@@ -1,7 +1,7 @@
 (function() {
   'use strict';
 
-  const config = window.CconeHubWidget || {};
+  const config = window.AXENTYCWidget || {};
   const widgetId = config.widgetId;
   const apiUrl = config.apiUrl || 'http://localhost:3001';
 
@@ -33,10 +33,10 @@
     : null;
 
   function getOrCreateVisitorId() {
-    let id = localStorage.getItem('cconehub_visitor_id');
+    let id = localStorage.getItem('axentyc_visitor_id');
     if (!id) {
       id = 'visitor_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
-      localStorage.setItem('cconehub_visitor_id', id);
+      localStorage.setItem('axentyc_visitor_id', id);
     }
     return id;
   }
@@ -146,24 +146,24 @@
     const textColor = widgetConfig.textColor || getContrastColor(primaryColor);
 
     const widgetHTML = `
-      <div id="cconehub-widget" class="cconehub-widget cconehub-${position}">
-        <div id="cconehub-button" class="cconehub-button">
+      <div id="axentyc-widget" class="axentyc-widget axentyc-${position}">
+        <div id="axentyc-button" class="axentyc-button">
           <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path>
           </svg>
-          <span id="cconehub-unread-badge" class="cconehub-badge" style="display: none;">0</span>
+          <span id="axentyc-unread-badge" class="axentyc-badge" style="display: none;">0</span>
         </div>
         
-        <div id="cconehub-chat-window" class="cconehub-chat-window" style="display: none;">
-          <div class="cconehub-header">
-            <div class="cconehub-header-content">
-              ${widgetConfig.avatarUrl ? `<img src="${widgetConfig.avatarUrl}" class="cconehub-avatar" alt="Avatar">` : ''}
-              <div class="cconehub-header-text">
-                <div class="cconehub-title">${widgetConfig.title || 'Chat'}</div>
-                <div class="cconehub-subtitle">${widgetConfig.subtitle || 'We\'re here to help'}</div>
+        <div id="axentyc-chat-window" class="axentyc-chat-window" style="display: none;">
+          <div class="axentyc-header">
+            <div class="axentyc-header-content">
+              ${widgetConfig.avatarUrl ? `<img src="${widgetConfig.avatarUrl}" class="axentyc-avatar" alt="Avatar">` : ''}
+              <div class="axentyc-header-text">
+                <div class="axentyc-title">${widgetConfig.title || 'Chat'}</div>
+                <div class="axentyc-subtitle">${widgetConfig.subtitle || 'We\'re here to help'}</div>
               </div>
             </div>
-            <button id="cconehub-close" class="cconehub-close-btn">
+            <button id="axentyc-close" class="axentyc-close-btn">
               <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <line x1="18" y1="6" x2="6" y2="18"></line>
                 <line x1="6" y1="6" x2="18" y2="18"></line>
@@ -171,28 +171,28 @@
             </button>
           </div>
           
-          <div id="cconehub-messages" class="cconehub-messages"></div>
+          <div id="axentyc-messages" class="axentyc-messages"></div>
           
-          <div id="cconehub-image-preview-overlay" class="cconehub-image-preview-overlay" style="display: none;">
-            <div class="cconehub-preview-header">
-              <button id="cconehub-preview-close" class="cconehub-preview-close" aria-label="Cerrar">
+          <div id="axentyc-image-preview-overlay" class="axentyc-image-preview-overlay" style="display: none;">
+            <div class="axentyc-preview-header">
+              <button id="axentyc-preview-close" class="axentyc-preview-close" aria-label="Cerrar">
                 <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                   <line x1="18" y1="6" x2="6" y2="18"></line>
                   <line x1="6" y1="6" x2="18" y2="18"></line>
                 </svg>
               </button>
             </div>
-            <div class="cconehub-preview-image-container">
-              <img id="cconehub-preview-image" src="" alt="Preview" />
+            <div class="axentyc-preview-image-container">
+              <img id="axentyc-preview-image" src="" alt="Preview" />
             </div>
-            <div class="cconehub-preview-input-area">
+            <div class="axentyc-preview-input-area">
               <textarea 
-                id="cconehub-preview-caption" 
-                class="cconehub-preview-caption" 
+                id="axentyc-preview-caption" 
+                class="axentyc-preview-caption" 
                 placeholder="Añade un mensaje..."
                 rows="1"
               ></textarea>
-              <button id="cconehub-preview-send" class="cconehub-preview-send-btn">
+              <button id="axentyc-preview-send" class="axentyc-preview-send-btn">
                 <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                   <line x1="22" y1="2" x2="11" y2="13"></line>
                   <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
@@ -201,26 +201,26 @@
             </div>
           </div>
           
-          <div id="cconehub-image-modal" class="cconehub-image-modal" style="display: none;">
-            <button id="cconehub-modal-close" class="cconehub-modal-close" aria-label="Cerrar">
+          <div id="axentyc-image-modal" class="axentyc-image-modal" style="display: none;">
+            <button id="axentyc-modal-close" class="axentyc-modal-close" aria-label="Cerrar">
               <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <line x1="18" y1="6" x2="6" y2="18"></line>
                 <line x1="6" y1="6" x2="18" y2="18"></line>
               </svg>
             </button>
-            <img id="cconehub-modal-image" src="" alt="Full size" />
+            <img id="axentyc-modal-image" src="" alt="Full size" />
           </div>
           
-          <div class="cconehub-input-container">
-            <input type="file" id="cconehub-file-input" accept="image/*" style="display: none;" />
-            <button id="cconehub-attach-btn" class="cconehub-attach-btn" title="Adjuntar imagen">
+          <div class="axentyc-input-container">
+            <input type="file" id="axentyc-file-input" accept="image/*" style="display: none;" />
+            <button id="axentyc-attach-btn" class="axentyc-attach-btn" title="Adjuntar imagen">
               <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"></path>
               </svg>
             </button>
             <textarea 
-              id="cconehub-input" 
-              class="cconehub-input" 
+              id="axentyc-input" 
+              class="axentyc-input" 
               placeholder="Type your message..."
               autocomplete="off"
               autocorrect="off"
@@ -229,7 +229,7 @@
               rows="1"
               enterkeyhint="send"
             ></textarea>
-            <button id="cconehub-send" class="cconehub-send-btn">
+            <button id="axentyc-send" class="axentyc-send-btn">
               <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <line x1="22" y1="2" x2="11" y2="13"></line>
                 <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
@@ -238,8 +238,8 @@
           </div>
           
           ${widgetConfig.showBranding !== false ? `
-            <div class="cconehub-branding">
-              Powered by <strong>CconeHub</strong>
+            <div class="axentyc-branding">
+              Powered by <strong>AXENTYC</strong>
             </div>
           ` : ''}
         </div>
@@ -255,7 +255,7 @@
   }
 
   function autoExpandTextarea() {
-    const input = document.getElementById('cconehub-input');
+    const input = document.getElementById('axentyc-input');
     if (!input) return;
     input.style.height = 'auto';
     const maxHeight = parseFloat(getComputedStyle(input).lineHeight) * 6;
@@ -263,13 +263,13 @@
   }
 
   function attachEventListeners() {
-    const button = document.getElementById('cconehub-button');
-    const closeBtn = document.getElementById('cconehub-close');
-    const sendBtn = document.getElementById('cconehub-send');
-    const attachBtn = document.getElementById('cconehub-attach-btn');
-    const fileInput = document.getElementById('cconehub-file-input');
-    const previewCloseBtn = document.getElementById('cconehub-preview-close');
-    const previewSendBtn = document.getElementById('cconehub-preview-send');
+    const button = document.getElementById('axentyc-button');
+    const closeBtn = document.getElementById('axentyc-close');
+    const sendBtn = document.getElementById('axentyc-send');
+    const attachBtn = document.getElementById('axentyc-attach-btn');
+    const fileInput = document.getElementById('axentyc-file-input');
+    const previewCloseBtn = document.getElementById('axentyc-preview-close');
+    const previewSendBtn = document.getElementById('axentyc-preview-send');
 
     button.addEventListener('click', toggleChat);
     closeBtn.addEventListener('click', toggleChat);
@@ -288,19 +288,19 @@
       previewSendBtn.addEventListener('click', sendImageWithCaption);
     }
 
-    const modalCloseBtn = document.getElementById('cconehub-modal-close');
+    const modalCloseBtn = document.getElementById('axentyc-modal-close');
     if (modalCloseBtn) {
       modalCloseBtn.addEventListener('click', closeImageModal);
     }
 
-    const imageModal = document.getElementById('cconehub-image-modal');
+    const imageModal = document.getElementById('axentyc-image-modal');
     if (imageModal) {
       imageModal.addEventListener('click', (e) => {
         if (e.target === imageModal) closeImageModal();
       });
     }
     
-    const input = document.getElementById('cconehub-input');
+    const input = document.getElementById('axentyc-input');
     input.addEventListener('keydown', (e) => {
       if (e.key === 'Enter' && !e.shiftKey) {
         e.preventDefault();
@@ -316,7 +316,7 @@
     });
     input.addEventListener('focus', () => {
       if (typeof window !== 'undefined' && isMobileViewport()) {
-        document.body.classList.add('cconehub-keyboard-active');
+        document.body.classList.add('axentyc-keyboard-active');
         lockBodyScroll(true);
         setTimeout(() => {
           adjustForMobileViewport();
@@ -327,7 +327,7 @@
     input.addEventListener('blur', () => {
       emitTypingStatus(false);
       if (isMobileViewport()) {
-        document.body.classList.remove('cconehub-keyboard-active');
+        document.body.classList.remove('axentyc-keyboard-active');
         setTimeout(adjustForMobileViewport, 100);
       }
     });
@@ -335,8 +335,8 @@
 
   function toggleChat() {
     isOpen = !isOpen;
-    const chatWindow = document.getElementById('cconehub-chat-window');
-    const button = document.getElementById('cconehub-button');
+    const chatWindow = document.getElementById('axentyc-chat-window');
+    const button = document.getElementById('axentyc-button');
     
     if (isOpen) {
       chatWindow.style.display = 'flex';
@@ -345,7 +345,7 @@
       setupMobileViewportBehavior();
       if (!isMobileViewport()) {
         setTimeout(() => {
-          const input = document.getElementById('cconehub-input');
+          const input = document.getElementById('axentyc-input');
           if (input) input.focus({ preventScroll: true });
         }, 120);
       }
@@ -356,7 +356,7 @@
       chatWindow.style.display = 'none';
       button.style.display = 'flex';
       setAdminTyping(false);
-      document.body.classList.remove('cconehub-keyboard-active');
+      document.body.classList.remove('axentyc-keyboard-active');
       if (isMobileViewport()) lockBodyScroll(false);
       teardownMobileViewportBehavior();
     }
@@ -366,10 +366,10 @@
     const file = event.target.files?.[0];
     if (!file) return;
 
-    const fileInput = document.getElementById('cconehub-file-input');
-    const overlay = document.getElementById('cconehub-image-preview-overlay');
-    const previewImg = document.getElementById('cconehub-preview-image');
-    const captionInput = document.getElementById('cconehub-preview-caption');
+    const fileInput = document.getElementById('axentyc-file-input');
+    const overlay = document.getElementById('axentyc-image-preview-overlay');
+    const previewImg = document.getElementById('axentyc-preview-image');
+    const captionInput = document.getElementById('axentyc-preview-caption');
 
     if (pendingAttachmentUrl) {
       try { URL.revokeObjectURL(pendingAttachmentUrl); } catch (e) {}
@@ -394,10 +394,10 @@
   }
 
   function closeImagePreview() {
-    const overlay = document.getElementById('cconehub-image-preview-overlay');
-    const previewImg = document.getElementById('cconehub-preview-image');
-    const captionInput = document.getElementById('cconehub-preview-caption');
-    const fileInput = document.getElementById('cconehub-file-input');
+    const overlay = document.getElementById('axentyc-image-preview-overlay');
+    const previewImg = document.getElementById('axentyc-preview-image');
+    const captionInput = document.getElementById('axentyc-preview-caption');
+    const fileInput = document.getElementById('axentyc-file-input');
 
     if (pendingAttachmentUrl) { try { URL.revokeObjectURL(pendingAttachmentUrl); } catch(e){} pendingAttachmentUrl = null; }
     pendingAttachment = null;
@@ -408,13 +408,13 @@
   }
 
   async function sendMessage() {
-    const input = document.getElementById('cconehub-input');
+    const input = document.getElementById('axentyc-input');
     const message = input.value.trim();
     
     if (!message) return;
 
-    const visitorName = localStorage.getItem('cconehub_visitor_name');
-    const visitorEmail = localStorage.getItem('cconehub_visitor_email');
+    const visitorName = localStorage.getItem('axentyc_visitor_name');
+    const visitorEmail = localStorage.getItem('axentyc_visitor_email');
 
     const tempMessage = {
       content: message,
@@ -470,10 +470,10 @@
   async function sendImageWithCaption() {
     if (!pendingAttachment) return;
 
-    const captionInput = document.getElementById('cconehub-preview-caption');
+    const captionInput = document.getElementById('axentyc-preview-caption');
     const caption = captionInput ? captionInput.value.trim() : '';
-    const visitorName = localStorage.getItem('cconehub_visitor_name');
-    const visitorEmail = localStorage.getItem('cconehub_visitor_email');
+    const visitorName = localStorage.getItem('axentyc_visitor_name');
+    const visitorEmail = localStorage.getItem('axentyc_visitor_email');
 
     // Save reference before closing preview (which clears pendingAttachment)
     const fileToUpload = pendingAttachment;
@@ -587,7 +587,7 @@
 
   function adjustForMobileViewport() {
     if (!isMobileViewport()) return;
-    const chatWindow = document.getElementById('cconehub-chat-window');
+    const chatWindow = document.getElementById('axentyc-chat-window');
     if (!chatWindow || !isOpen) return;
 
     const vv = window.visualViewport;
@@ -605,16 +605,16 @@
       chatWindow.style.maxHeight = `${viewportHeight}px`;
       chatWindow.style.top = `${viewportOffsetTop}px`;
       chatWindow.style.bottom = 'auto';
-      chatWindow.classList.add('cconehub-keyboard-open');
-      document.body.classList.add('cconehub-keyboard-active');
+      chatWindow.classList.add('axentyc-keyboard-open');
+      document.body.classList.add('axentyc-keyboard-active');
       window.requestAnimationFrame(scrollToBottom);
     } else {
       chatWindow.style.height = '';
       chatWindow.style.maxHeight = '';
       chatWindow.style.top = '';
       chatWindow.style.bottom = '';
-      chatWindow.classList.remove('cconehub-keyboard-open');
-      document.body.classList.remove('cconehub-keyboard-active');
+      chatWindow.classList.remove('axentyc-keyboard-open');
+      document.body.classList.remove('axentyc-keyboard-active');
     }
   }
 
@@ -642,13 +642,13 @@
 
   function teardownMobileViewportBehavior() {
     if (mobileViewportCleanup) mobileViewportCleanup();
-    const chatWindow = document.getElementById('cconehub-chat-window');
+    const chatWindow = document.getElementById('axentyc-chat-window');
     if (chatWindow) {
       chatWindow.style.height = '';
       chatWindow.style.maxHeight = '';
       chatWindow.style.top = '';
       chatWindow.style.bottom = '';
-      chatWindow.classList.remove('cconehub-keyboard-open');
+      chatWindow.classList.remove('axentyc-keyboard-open');
     }
   }
 
@@ -676,12 +676,12 @@
   }
 
   function renderMessages() {
-    const container = document.getElementById('cconehub-messages');
+    const container = document.getElementById('axentyc-messages');
     if (!container) return;
 
     if (messages.length === 0) {
       container.innerHTML = `
-        <div class="cconehub-welcome">
+        <div class="axentyc-welcome">
           <p>${widgetConfig.welcomeMessage || 'Hello! How can we help you today?'}</p>
         </div>
       `;
@@ -697,26 +697,26 @@
       const isFile = msg.type === 'file' && msg.media && msg.media.url;
       let contentHtml = '';
       if (isImage) {
-        contentHtml = `<img src="${msg.media.url}" alt="${(msg.media.fileName || 'image').replace(/"/g, '&quot;')}" class="cconehub-image" loading="lazy" onclick="viewFullImage('${msg.media.url}')" />`;
+        contentHtml = `<img src="${msg.media.url}" alt="${(msg.media.fileName || 'image').replace(/"/g, '&quot;')}" class="axentyc-image" loading="lazy" onclick="viewFullImage('${msg.media.url}')" />`;
         if (msg.content && msg.content !== '📷 Imagen') {
-          contentHtml += `<div class="cconehub-message-text cconehub-image-caption">${escapeHtml(msg.content)}</div>`;
+          contentHtml += `<div class="axentyc-message-text axentyc-image-caption">${escapeHtml(msg.content)}</div>`;
         }
       } else if (isFile) {
-        contentHtml = `<a href="${msg.media.url}" target="_blank" rel="noopener noreferrer" class="cconehub-file-link">${escapeHtml(msg.content || msg.media.fileName || 'Archivo')}</a>`;
+        contentHtml = `<a href="${msg.media.url}" target="_blank" rel="noopener noreferrer" class="axentyc-file-link">${escapeHtml(msg.content || msg.media.fileName || 'Archivo')}</a>`;
       } else {
-        contentHtml = `<div class="cconehub-message-text">${escapeHtml(msg.content)}</div>`;
+        contentHtml = `<div class="axentyc-message-text">${escapeHtml(msg.content)}</div>`;
       }
       
       return `
-        <div class="cconehub-message ${isFromVisitor ? 'cconehub-message-outbound' : 'cconehub-message-inbound'}">
-          ${!isFromVisitor ? `<div class=\"cconehub-message-sender-label\">${escapeHtml(msg.senderName || 'Support')}</div>` : ''}
-          <div class="cconehub-message-wrapper">
-            <div class="cconehub-message-content">
+        <div class="axentyc-message ${isFromVisitor ? 'axentyc-message-outbound' : 'axentyc-message-inbound'}">
+          ${!isFromVisitor ? `<div class=\"axentyc-message-sender-label\">${escapeHtml(msg.senderName || 'Support')}</div>` : ''}
+          <div class="axentyc-message-wrapper">
+            <div class="axentyc-message-content">
               ${contentHtml}
             </div>
-            <div class="cconehub-message-meta">
-              <span class="cconehub-message-time">${time}</span>
-              ${isFromVisitor ? `<span class="cconehub-message-status ${statusMeta.className}">${statusMeta.icon}</span>` : ''}
+            <div class="axentyc-message-meta">
+              <span class="axentyc-message-time">${time}</span>
+              ${isFromVisitor ? `<span class="axentyc-message-status ${statusMeta.className}">${statusMeta.icon}</span>` : ''}
             </div>
           </div>
         </div>
@@ -725,10 +725,10 @@
 
     const typingHtml = adminTyping
       ? `
-        <div class="cconehub-message cconehub-message-inbound cconehub-typing-row">
-          <div class="cconehub-message-wrapper">
-            <div class="cconehub-message-content cconehub-typing-bubble">
-              <div class="cconehub-typing-dots">
+        <div class="axentyc-message axentyc-message-inbound axentyc-typing-row">
+          <div class="axentyc-message-wrapper">
+            <div class="axentyc-message-content axentyc-typing-bubble">
+              <div class="axentyc-typing-dots">
                 <span></span>
                 <span></span>
                 <span></span>
@@ -756,7 +756,7 @@
   }
 
   function scrollToBottom() {
-    const container = document.getElementById('cconehub-messages');
+    const container = document.getElementById('axentyc-messages');
     if (container) {
       setTimeout(() => {
         container.scrollTop = container.scrollHeight;
@@ -765,7 +765,7 @@
   }
 
   function clearUnreadBadge() {
-    const badge = document.getElementById('cconehub-unread-badge');
+    const badge = document.getElementById('axentyc-unread-badge');
     if (badge) {
       badge.style.display = 'none';
       badge.textContent = '0';
@@ -774,7 +774,7 @@
 
   function playNotificationSound() {
     if (!isOpen) {
-      const badge = document.getElementById('cconehub-unread-badge');
+      const badge = document.getElementById('axentyc-unread-badge');
       if (badge) {
         const current = parseInt(badge.textContent) || 0;
         badge.textContent = current + 1;
@@ -790,8 +790,8 @@
 
   window.viewFullImage = function(url) {
     viewingImage = url;
-    const modal = document.getElementById('cconehub-image-modal');
-    const modalImg = document.getElementById('cconehub-modal-image');
+    const modal = document.getElementById('axentyc-image-modal');
+    const modalImg = document.getElementById('axentyc-modal-image');
     if (modal && modalImg) {
       modalImg.src = url;
       modal.style.display = 'flex';
@@ -800,10 +800,10 @@
 
   function closeImageModal() {
     viewingImage = null;
-    const modal = document.getElementById('cconehub-image-modal');
+    const modal = document.getElementById('axentyc-image-modal');
     if (modal) {
       modal.style.display = 'none';
-      const modalImg = document.getElementById('cconehub-modal-image');
+      const modalImg = document.getElementById('axentyc-modal-image');
       if (modalImg) modalImg.src = '';
     }
   }
@@ -874,11 +874,11 @@
   }
 
   function applyThemeMode() {
-    const widgetRoot = document.getElementById('cconehub-widget');
+    const widgetRoot = document.getElementById('axentyc-widget');
     if (!widgetRoot) return;
 
     const isDark = shouldUseDarkTheme();
-    widgetRoot.classList.toggle('cconehub-theme-dark', isDark);
+    widgetRoot.classList.toggle('axentyc-theme-dark', isDark);
   }
 
   function observeThemeChanges() {
@@ -921,7 +921,7 @@
     const encodedPrimary = encodeColor(primary);
 
     const styles = `
-      #cconehub-widget {
+      #axentyc-widget {
         --ch-primary: ${primary};
         --ch-primary-600: ${p600};
         --ch-primary-700: ${p700};
@@ -932,24 +932,24 @@
         --ch-shadow-35: ${shadow35};
         --ch-shadow-40: ${shadow40};
       }
-      .cconehub-widget {
+      .axentyc-widget {
         position: fixed;
         bottom: 20px;
         z-index: 999999;
         font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
       }
-      .cconehub-right { right: 20px; }
-      .cconehub-left { left: 20px; }
-      .cconehub-right .cconehub-chat-window {
+      .axentyc-right { right: 20px; }
+      .axentyc-left { left: 20px; }
+      .axentyc-right .axentyc-chat-window {
         right: 20px;
         left: auto;
       }
-      .cconehub-left .cconehub-chat-window {
+      .axentyc-left .axentyc-chat-window {
         left: 20px;
         right: auto;
       }
       
-      .cconehub-button {
+      .axentyc-button {
         width: 64px;
         height: 64px;
         border-radius: 50%;
@@ -962,11 +962,11 @@
         transition: all 0.4s cubic-bezier(0.34, 1.56, 0.64, 1);
         position: relative;
         border: none;
-        animation: cconehubPulse 2.5s ease-in-out infinite;
+        animation: axentycPulse 2.5s ease-in-out infinite;
         color: var(--ch-text-on-primary);
       }
       
-      @keyframes cconehubPulse {
+      @keyframes axentycPulse {
         0% {
           box-shadow: 0 8px 28px var(--ch-shadow-35), 0 4px 12px rgba(0,0,0,0.15), 0 0 0 0 var(--ch-ring);
         }
@@ -975,16 +975,16 @@
         }
       }
       
-      .cconehub-button:hover {
+      .axentyc-button:hover {
         transform: translateY(-6px) scale(1.08);
         box-shadow: 0 16px 40px var(--ch-shadow-40), 0 8px 16px rgba(0,0,0,0.2);
         animation: none;
       }
-      .cconehub-button:active {
+      .axentyc-button:active {
         transform: translateY(-3px) scale(1.04);
       }
       
-      .cconehub-badge {
+      .axentyc-badge {
         position: absolute;
         top: -5px;
         right: -5px;
@@ -998,7 +998,7 @@
         text-align: center;
       }
       
-      .cconehub-chat-window {
+      .axentyc-chat-window {
         position: fixed;
         bottom: 100px;
         width: 400px;
@@ -1028,7 +1028,7 @@
         }
       }
       
-      .cconehub-header {
+      .axentyc-header {
         padding: 24px 20px;
         display: flex;
         align-items: center;
@@ -1039,7 +1039,7 @@
         color: var(--ch-text-on-primary);
       }
       
-      .cconehub-header::before {
+      .axentyc-header::before {
         content: '';
         position: absolute;
         top: 0;
@@ -1050,13 +1050,13 @@
         pointer-events: none;
       }
       
-      .cconehub-header-content {
+      .axentyc-header-content {
         display: flex;
         align-items: center;
         gap: 14px;
       }
       
-      .cconehub-avatar {
+      .axentyc-avatar {
         width: 48px;
         height: 48px;
         border-radius: 50%;
@@ -1071,7 +1071,7 @@
         border: 2px solid rgba(255,255,255,0.3);
       }
       
-      .cconehub-title {
+      .axentyc-title {
         font-size: 17px;
         font-weight: 700;
         color: white;
@@ -1079,7 +1079,7 @@
         letter-spacing: -0.2px;
       }
       
-      .cconehub-subtitle {
+      .axentyc-subtitle {
         font-size: 13px;
         color: rgba(255,255,255,0.9);
         margin-top: 3px;
@@ -1087,7 +1087,7 @@
         text-shadow: 0 1px 2px rgba(0,0,0,0.08);
       }
       
-      .cconehub-close-btn {
+      .axentyc-close-btn {
         background: rgba(255,255,255,0.1);
         border: none;
         color: white;
@@ -1103,15 +1103,15 @@
         justify-content: center;
         backdrop-filter: blur(10px);
       }
-      .cconehub-close-btn:hover { 
+      .axentyc-close-btn:hover { 
         background: rgba(255,255,255,0.25);
         transform: scale(1.05);
       }
-      .cconehub-close-btn:active {
+      .axentyc-close-btn:active {
         transform: scale(0.95);
       }
       
-      .cconehub-messages {
+      .axentyc-messages {
         flex: 1;
         overflow-y: auto;
         padding: 20px 16px;
@@ -1120,7 +1120,7 @@
         position: relative;
       }
       
-      .cconehub-messages::before {
+      .axentyc-messages::before {
         content: '';
         position: absolute;
         top: 0;
@@ -1133,45 +1133,45 @@
         background-size: 360px 360px;
         pointer-events: none;
       }
-      .cconehub-widget.cconehub-theme-dark .cconehub-messages::before {
+      .axentyc-widget.axentyc-theme-dark .axentyc-messages::before {
         opacity: 0.42;
         background-image: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="360" height="360" viewBox="0 0 360 360"><defs><pattern id="icons" x="0" y="0" width="60" height="60" patternUnits="userSpaceOnUse"><g stroke="%234b5563" stroke-width="1.2" fill="none" opacity="0.55"><rect x="6" y="6" width="16" height="12" rx="2"/><path d="M8 14l4-4 4 4 6-6"/><circle cx="42" cy="12" r="6"/><path d="M38 12h8M42 8v8"/><path d="M8 40l14-6-4 14-3-5-7-3z"/><rect x="36" y="36" width="12" height="10" rx="2"/></g></pattern></defs><rect width="360" height="360" fill="url(%23icons)"/></svg>');
         background-repeat: repeat;
         background-size: 360px 360px;
       }
       
-      .cconehub-messages::-webkit-scrollbar {
+      .axentyc-messages::-webkit-scrollbar {
         width: 8px;
       }
       
-      .cconehub-messages::-webkit-scrollbar-track {
+      .axentyc-messages::-webkit-scrollbar-track {
         background: rgba(0,0,0,0.02);
         border-radius: 10px;
       }
       
-      .cconehub-messages::-webkit-scrollbar-thumb {
+      .axentyc-messages::-webkit-scrollbar-thumb {
         background: linear-gradient(180deg, #cbd5e1 0%, #94a3b8 100%);
         border-radius: 10px;
         border: 2px solid transparent;
         background-clip: padding-box;
       }
       
-      .cconehub-messages::-webkit-scrollbar-thumb:hover {
+      .axentyc-messages::-webkit-scrollbar-thumb:hover {
         background: linear-gradient(180deg, #94a3b8 0%, #64748b 100%);
         background-clip: padding-box;
       }
       
-      .cconehub-welcome {
+      .axentyc-welcome {
         text-align: center;
         padding: 40px 20px;
         color: #666;
       }
       
-      .cconehub-message {
+      .axentyc-message {
         display: flex;
         flex-direction: column;
         margin-bottom: 12px;
-        animation: cconehubMessageSlideIn 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
+        animation: axentycMessageSlideIn 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
       }
       
       @keyframes fadeInMessage {
@@ -1185,24 +1185,24 @@
         }
       }
       
-      .cconehub-message-inbound {
+      .axentyc-message-inbound {
         justify-content: flex-start;
         align-items: flex-start;
       }
       
-      .cconehub-message-outbound {
+      .axentyc-message-outbound {
         justify-content: flex-end;
         align-items: flex-end;
       }
       
-      .cconehub-message-wrapper {
+      .axentyc-message-wrapper {
         display: inline-flex;
         flex-direction: column;
         max-width: 75%;
         gap: 3px;
       }
       
-      .cconehub-message-content {
+      .axentyc-message-content {
         border-radius: 12px;
         word-wrap: break-word;
         overflow-wrap: anywhere;
@@ -1212,47 +1212,47 @@
         overflow: hidden;
       }
 
-      .cconehub-message-content:has(.cconehub-image) {
+      .axentyc-message-content:has(.axentyc-image) {
         padding: 0;
       }
 
-      .cconehub-message-content:not(:has(.cconehub-image)) {
+      .axentyc-message-content:not(:has(.axentyc-image)) {
         padding: 8px 12px;
       }
 
-      .cconehub-typing-row {
+      .axentyc-typing-row {
         margin-top: -2px;
       }
 
-      .cconehub-typing-bubble {
+      .axentyc-typing-bubble {
         min-width: 58px;
         padding: 10px 12px;
       }
 
-      .cconehub-typing-dots {
+      .axentyc-typing-dots {
         display: inline-flex;
         align-items: center;
         gap: 5px;
       }
 
-      .cconehub-typing-dots span {
+      .axentyc-typing-dots span {
         width: 7px;
         height: 7px;
         border-radius: 50%;
         background: #9ca3af;
-        animation: cconehubTypingBounce 1s infinite ease-in-out;
+        animation: axentycTypingBounce 1s infinite ease-in-out;
         opacity: 0.65;
       }
 
-      .cconehub-typing-dots span:nth-child(2) {
+      .axentyc-typing-dots span:nth-child(2) {
         animation-delay: 0.15s;
       }
 
-      .cconehub-typing-dots span:nth-child(3) {
+      .axentyc-typing-dots span:nth-child(3) {
         animation-delay: 0.3s;
       }
 
-      @keyframes cconehubTypingBounce {
+      @keyframes axentycTypingBounce {
         0%, 80%, 100% {
           transform: translateY(0) scale(0.9);
           opacity: 0.45;
@@ -1263,19 +1263,19 @@
         }
       }
       
-      .cconehub-message-outbound .cconehub-message-content {
+      .axentyc-message-outbound .axentyc-message-content {
         background: linear-gradient(135deg, var(--ch-primary) 0%, var(--ch-primary-600) 100%);
         color: white;
         border-bottom-right-radius: 4px;
       }
       
-      .cconehub-message-inbound .cconehub-message-content {
+      .axentyc-message-inbound .axentyc-message-content {
         background: #ffffff;
         color: #111827;
         border-bottom-left-radius: 4px;
       }
       
-      .cconehub-message-sender-label {
+      .axentyc-message-sender-label {
         font-size: 11px;
         font-weight: 600;
         margin-bottom: 2px;
@@ -1284,7 +1284,7 @@
         opacity: 0.85;
       }
 
-      .cconehub-image {
+      .axentyc-image {
         max-width: 280px;
         max-height: 350px;
         width: 100%;
@@ -1296,23 +1296,23 @@
         border-radius: 0;
       }
 
-      .cconehub-image:hover {
+      .axentyc-image:hover {
         opacity: 0.95;
       }
 
-      .cconehub-image-caption {
+      .axentyc-image-caption {
         padding: 6px 10px 8px 10px;
         margin: 0;
         font-size: 14.5px;
       }
 
-      .cconehub-file-link {
+      .axentyc-file-link {
         color: inherit;
         text-decoration: underline;
         display: inline-block;
       }
       
-      .cconehub-message-text {
+      .axentyc-message-text {
         font-size: 14.5px;
         line-height: 1.5;
         overflow-wrap: break-word;
@@ -1321,52 +1321,52 @@
         white-space: pre-wrap;
         color: inherit;
       }
-      .cconehub-message-inbound .cconehub-message-text {
+      .axentyc-message-inbound .axentyc-message-text {
         color: #111827 !important;
       }
-      .cconehub-message-outbound .cconehub-message-text { color: var(--ch-text-on-primary) !important; }
-      .cconehub-message-meta {
+      .axentyc-message-outbound .axentyc-message-text { color: var(--ch-text-on-primary) !important; }
+      .axentyc-message-meta {
         display: flex;
         align-items: center;
         gap: 4px;
         padding: 0 3px;
       }
-      .cconehub-message-inbound .cconehub-message-meta {
+      .axentyc-message-inbound .axentyc-message-meta {
         justify-content: flex-start;
       }
-      .cconehub-message-outbound .cconehub-message-meta {
+      .axentyc-message-outbound .axentyc-message-meta {
         justify-content: flex-end;
       }
-      .cconehub-message-time {
+      .axentyc-message-time {
         font-size: 11px;
         color: #8696a0;
       }
-      .cconehub-message-status {
+      .axentyc-message-status {
         font-size: 12px;
         line-height: 1;
         display: inline-flex;
         align-items: center;
         color: #8696a0;
       }
-      .cconehub-message-status svg {
+      .axentyc-message-status svg {
         width: 16px;
         height: 16px;
       }
-      .cconehub-message-status.status-read {
+      .axentyc-message-status.status-read {
         color: #53bdeb;
       }
-      .cconehub-message-status.status-failed {
+      .axentyc-message-status.status-failed {
         color: #f87171;
       }
       
       /* Mobile refinements */
       @media (max-width: 480px) {
-        .cconehub-message-wrapper { max-width: 96%; }
-        .cconehub-messages { padding-left: 10px; padding-right: 10px; }
+        .axentyc-message-wrapper { max-width: 96%; }
+        .axentyc-messages { padding-left: 10px; padding-right: 10px; }
       }
 
       /* WhatsApp-style image preview overlay */
-      .cconehub-image-preview-overlay {
+      .axentyc-image-preview-overlay {
         position: absolute;
         top: 0;
         left: 0;
@@ -1380,14 +1380,14 @@
         justify-content: space-between;
       }
 
-      .cconehub-preview-header {
+      .axentyc-preview-header {
         width: 100%;
         padding: 16px;
         display: flex;
         justify-content: flex-end;
       }
 
-      .cconehub-preview-close {
+      .axentyc-preview-close {
         width: 40px;
         height: 40px;
         border-radius: 50%;
@@ -1401,12 +1401,12 @@
         transition: all 0.2s ease;
       }
 
-      .cconehub-preview-close:hover {
+      .axentyc-preview-close:hover {
         background: rgba(255, 255, 255, 0.2);
         transform: scale(1.05);
       }
 
-      .cconehub-preview-image-container {
+      .axentyc-preview-image-container {
         flex: 1;
         display: flex;
         align-items: center;
@@ -1416,14 +1416,14 @@
         overflow: hidden;
       }
 
-      .cconehub-preview-image-container img {
+      .axentyc-preview-image-container img {
         max-width: 100%;
         max-height: 100%;
         object-fit: contain;
         border-radius: 8px;
       }
 
-      .cconehub-preview-input-area {
+      .axentyc-preview-input-area {
         width: 100%;
         padding: 16px;
         background: rgba(30, 30, 30, 0.9);
@@ -1432,7 +1432,7 @@
         align-items: flex-end;
       }
 
-      .cconehub-preview-caption {
+      .axentyc-preview-caption {
         flex: 1;
         padding: 12px 16px;
         border: 2px solid rgba(255, 255, 255, 0.2);
@@ -1447,16 +1447,16 @@
         font-family: inherit;
       }
 
-      .cconehub-preview-caption::placeholder {
+      .axentyc-preview-caption::placeholder {
         color: rgba(255, 255, 255, 0.5);
       }
 
-      .cconehub-preview-caption:focus {
+      .axentyc-preview-caption:focus {
         border-color: var(--ch-primary);
         background: rgba(255, 255, 255, 0.15);
       }
 
-      .cconehub-preview-send-btn {
+      .axentyc-preview-send-btn {
         width: 46px;
         height: 46px;
         border-radius: 50%;
@@ -1472,17 +1472,17 @@
         flex-shrink: 0;
       }
 
-      .cconehub-preview-send-btn:hover {
+      .axentyc-preview-send-btn:hover {
         transform: scale(1.08) translateY(-2px);
         box-shadow: 0 6px 16px var(--ch-shadow-40);
       }
 
-      .cconehub-preview-send-btn:active {
+      .axentyc-preview-send-btn:active {
         transform: scale(0.98);
       }
 
       /* Full-size image modal */
-      .cconehub-image-modal {
+      .axentyc-image-modal {
         position: absolute;
         top: 0;
         left: 0;
@@ -1496,14 +1496,14 @@
         padding: 20px;
       }
 
-      .cconehub-image-modal img {
+      .axentyc-image-modal img {
         max-width: 100%;
         max-height: 100%;
         object-fit: contain;
         border-radius: 8px;
       }
 
-      .cconehub-modal-close {
+      .axentyc-modal-close {
         position: absolute;
         top: 16px;
         right: 16px;
@@ -1521,12 +1521,12 @@
         z-index: 2001;
       }
 
-      .cconehub-modal-close:hover {
+      .axentyc-modal-close:hover {
         background: rgba(255, 255, 255, 0.2);
         transform: scale(1.05);
       }
       
-      .cconehub-input-container {
+      .axentyc-input-container {
         display: flex;
         padding: 16px;
         background: #ffffff;
@@ -1536,7 +1536,7 @@
         align-items: flex-end;
       }
       
-      .cconehub-input {
+      .axentyc-input {
         flex: 1;
         padding: 12px 16px;
         border: 2px solid #e5e7eb;
@@ -1557,20 +1557,20 @@
         scrollbar-width: none;
       }
       
-      .cconehub-input::-webkit-scrollbar {
+      .axentyc-input::-webkit-scrollbar {
         display: none;
       }
-      .cconehub-input::placeholder {
+      .axentyc-input::placeholder {
         color: #9ca3af;
       }
-      .cconehub-input:focus {
+      .axentyc-input:focus {
         border-color: var(--ch-primary);
         background: #ffffff;
         box-shadow: 0 0 0 3px var(--ch-ring), inset 0 1px 3px rgba(0,0,0,0.04);
         transform: translateY(-1px);
       }
       
-      .cconehub-attach-btn {
+      .axentyc-attach-btn {
         width: 40px;
         height: 40px;
         border-radius: 50%;
@@ -1584,20 +1584,20 @@
         color: #6b7280;
         flex-shrink: 0;
       }
-      .cconehub-attach-btn:hover {
+      .axentyc-attach-btn:hover {
         background: #e5e7eb;
         color: var(--ch-primary);
         transform: scale(1.05);
       }
-      .cconehub-attach-btn:active {
+      .axentyc-attach-btn:active {
         transform: scale(0.95);
       }
-      .cconehub-attach-btn:disabled {
+      .axentyc-attach-btn:disabled {
         opacity: 0.5;
         cursor: not-allowed;
       }
       
-      .cconehub-send-btn {
+      .axentyc-send-btn {
         width: 46px;
         height: 46px;
         border-radius: 50%;
@@ -1612,16 +1612,16 @@
         flex-shrink: 0;
         color: var(--ch-text-on-primary);
       }
-      .cconehub-send-btn:hover {
+      .axentyc-send-btn:hover {
         transform: scale(1.08) translateY(-2px);
         box-shadow: 0 6px 16px var(--ch-shadow-40), 0 3px 6px rgba(0,0,0,0.15);
       }
-      .cconehub-send-btn:active {
+      .axentyc-send-btn:active {
         transform: scale(0.98);
         box-shadow: 0 2px 8px var(--ch-shadow-20), 0 1px 2px rgba(0,0,0,0.1);
       }
       
-      .cconehub-branding {
+      .axentyc-branding {
         padding: 10px;
         text-align: center;
         font-size: 10px;
@@ -1630,70 +1630,70 @@
         border-top: 1px solid #e5e7eb;
       }
 
-      .cconehub-widget.cconehub-theme-dark .cconehub-chat-window {
+      .axentyc-widget.axentyc-theme-dark .axentyc-chat-window {
           background: #1f2937;
           box-shadow: 0 12px 40px rgba(0,0,0,0.4), 0 4px 12px rgba(0,0,0,0.3);
       }
-      .cconehub-widget.cconehub-theme-dark .cconehub-messages {
+      .axentyc-widget.axentyc-theme-dark .axentyc-messages {
           background: #0b141a;
       }
-      .cconehub-widget.cconehub-theme-dark .cconehub-messages::-webkit-scrollbar-thumb {
+      .axentyc-widget.axentyc-theme-dark .axentyc-messages::-webkit-scrollbar-thumb {
           background: #4b5563;
       }
-      .cconehub-widget.cconehub-theme-dark .cconehub-messages::-webkit-scrollbar-thumb:hover {
+      .axentyc-widget.axentyc-theme-dark .axentyc-messages::-webkit-scrollbar-thumb:hover {
           background: #6b7280;
       }
-      .cconehub-widget.cconehub-theme-dark .cconehub-message-outbound .cconehub-message-content {
+      .axentyc-widget.axentyc-theme-dark .axentyc-message-outbound .axentyc-message-content {
           background: linear-gradient(135deg, var(--ch-primary-700) 0%, var(--ch-primary-600) 100%);
           color: var(--ch-text-on-primary);
       }
-      .cconehub-widget.cconehub-theme-dark .cconehub-message-inbound .cconehub-message-content {
+      .axentyc-widget.axentyc-theme-dark .axentyc-message-inbound .axentyc-message-content {
           background: #374151;
           color: #f3f4f6;
       }
-      .cconehub-widget.cconehub-theme-dark .cconehub-typing-dots span {
+      .axentyc-widget.axentyc-theme-dark .axentyc-typing-dots span {
           background: #cbd5e1;
       }
-      .cconehub-widget.cconehub-theme-dark .cconehub-message-inbound .cconehub-message-text {
+      .axentyc-widget.axentyc-theme-dark .axentyc-message-inbound .axentyc-message-text {
           color: #f3f4f6 !important;
       }
-      .cconehub-widget.cconehub-theme-dark .cconehub-message-inbound .cconehub-message-time {
+      .axentyc-widget.axentyc-theme-dark .axentyc-message-inbound .axentyc-message-time {
           color: #9ca3af;
       }
-      .cconehub-widget.cconehub-theme-dark .cconehub-message-sender-label {
+      .axentyc-widget.axentyc-theme-dark .axentyc-message-sender-label {
           color: #d1d5db;
       }
-      .cconehub-widget.cconehub-theme-dark .cconehub-input-container {
+      .axentyc-widget.axentyc-theme-dark .axentyc-input-container {
           background: #1f2937;
           border-top-color: #374151;
       }
-      .cconehub-widget.cconehub-theme-dark .cconehub-input {
+      .axentyc-widget.axentyc-theme-dark .axentyc-input {
           background: #374151;
           border-color: #4b5563;
           color: #f3f4f6;
       }
-      .cconehub-widget.cconehub-theme-dark .cconehub-input:focus {
+      .axentyc-widget.axentyc-theme-dark .axentyc-input:focus {
           background: #4b5563;
           border-color: var(--ch-primary);
           box-shadow: 0 0 0 3px var(--ch-ring), inset 0 1px 3px rgba(0,0,0,0.04);
       }
-      .cconehub-widget.cconehub-theme-dark .cconehub-input::placeholder {
+      .axentyc-widget.axentyc-theme-dark .axentyc-input::placeholder {
           color: #9ca3af;
       }
-      .cconehub-widget.cconehub-theme-dark .cconehub-branding {
+      .axentyc-widget.axentyc-theme-dark .axentyc-branding {
           background: #1f2937;
           border-top-color: #374151;
           color: #6b7280;
       }
       
       @media (max-width: 768px) {
-        .cconehub-widget {
+        .axentyc-widget {
           bottom: 0;
           right: 0;
           left: 0;
         }
         
-        .cconehub-button {
+        .axentyc-button {
           position: fixed;
           bottom: max(16px, env(safe-area-inset-bottom));
           right: max(16px, env(safe-area-inset-right));
@@ -1701,7 +1701,7 @@
           height: 56px;
         }
         
-        .cconehub-chat-window {
+        .axentyc-chat-window {
           position: fixed;
           top: 0;
           left: 0;
@@ -1714,54 +1714,54 @@
           margin: 0;
         }
 
-        .cconehub-chat-window.cconehub-keyboard-open {
+        .axentyc-chat-window.axentyc-keyboard-open {
           border-radius: 0;
         }
         
-        .cconehub-header {
+        .axentyc-header {
           padding: 16px 20px;
           padding-top: max(16px, env(safe-area-inset-top));
         }
         
-        .cconehub-messages {
+        .axentyc-messages {
           padding: 14px 10px;
           padding-bottom: max(12px, env(safe-area-inset-bottom));
         }
         
-        .cconehub-input-container {
+        .axentyc-input-container {
           padding: 12px 10px;
           padding-bottom: max(10px, env(safe-area-inset-bottom));
         }
 
-        .cconehub-chat-window.cconehub-keyboard-open .cconehub-input-container {
+        .axentyc-chat-window.axentyc-keyboard-open .axentyc-input-container {
           padding-bottom: max(8px, env(safe-area-inset-bottom));
         }
         
-        .cconehub-input {
+        .axentyc-input {
           font-size: 16px;
           padding: 12px 14px;
         }
         
-        .cconehub-send-btn {
+        .axentyc-send-btn {
           width: 44px;
           height: 44px;
           flex-shrink: 0;
         }
         
-        .cconehub-message-content {
+        .axentyc-message-content {
           max-width: 85%;
         }
         
-        .cconehub-avatar {
+        .axentyc-avatar {
           width: 40px;
           height: 40px;
         }
         
-        .cconehub-title {
+        .axentyc-title {
           font-size: 15px;
         }
         
-        .cconehub-subtitle {
+        .axentyc-subtitle {
           font-size: 11px;
         }
       }

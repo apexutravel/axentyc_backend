@@ -1,6 +1,6 @@
 # Facebook Messenger Integration Setup
 
-Esta guía te ayudará a configurar la integración de Facebook Messenger con CConeHub.
+Esta guía te ayudará a configurar la integración de Facebook Messenger con AXENTYC.
 
 ## Requisitos Previos
 
@@ -14,7 +14,7 @@ Esta guía te ayudará a configurar la integración de Facebook Messenger con CC
 2. Haz clic en **"My Apps"** → **"Create App"**
 3. Selecciona **"Business"** como tipo de app
 4. Completa los datos:
-   - **App Name**: CConeHub (o el nombre que prefieras)
+   - **App Name**: AXENTYC (o el nombre que prefieras)
    - **App Contact Email**: Tu email
 5. Haz clic en **"Create App"**
 
@@ -32,12 +32,12 @@ Copia las credenciales de tu app y agrégalas al archivo `.env`:
 # Facebook Integration
 FACEBOOK_APP_ID=tu-app-id-aqui
 FACEBOOK_APP_SECRET=tu-app-secret-aqui
-FACEBOOK_VERIFY_TOKEN=cconehub_fb_verify
+FACEBOOK_VERIFY_TOKEN=axentyc_fb_verify
 ```
 
 **Dónde encontrar estas credenciales:**
 - **App ID** y **App Secret**: En **Settings** → **Basic** de tu app de Facebook
-- **Verify Token**: Puedes usar cualquier string seguro (ej: `cconehub_fb_verify_12345`)
+- **Verify Token**: Puedes usar cualquier string seguro (ej: `axentyc_fb_verify_12345`)
 
 ## Paso 4: Configurar el Webhook
 
@@ -91,18 +91,18 @@ Para usar la app en producción con páginas reales:
 
 ## Flujo de Mensajes
 
-### Mensajes Entrantes (Facebook → CConeHub)
+### Mensajes Entrantes (Facebook → AXENTYC)
 
 1. Usuario envía mensaje a tu página de Facebook
 2. Facebook envía webhook a `POST /webhook/facebook`
-3. CConeHub crea/actualiza el contacto automáticamente
+3. AXENTYC crea/actualiza el contacto automáticamente
 4. Se crea una conversación con canal `facebook`
 5. El mensaje aparece en tiempo real en la bandeja de conversaciones
 
-### Mensajes Salientes (CConeHub → Facebook)
+### Mensajes Salientes (AXENTYC → Facebook)
 
 1. Agente responde desde la interfaz de conversaciones
-2. CConeHub envía el mensaje vía Graph API
+2. AXENTYC envía el mensaje vía Graph API
 3. Usuario recibe el mensaje en Facebook Messenger
 4. Facebook envía confirmación de entrega/lectura vía webhook
 
@@ -110,7 +110,7 @@ Para usar la app en producción con páginas reales:
 
 ```
 ┌─────────────┐         ┌──────────────┐         ┌─────────────┐
-│   Facebook  │────────▶│   Webhook    │────────▶│  CConeHub   │
+│   Facebook  │────────▶│   Webhook    │────────▶│  AXENTYC   │
 │  Messenger  │         │  (Backend)   │         │   (CRM)     │
 └─────────────┘         └──────────────┘         └─────────────┘
       ▲                                                  │

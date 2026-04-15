@@ -44,8 +44,8 @@ async function bootstrap() {
 
   if (configService.get('SWAGGER_ENABLED') === 'true') {
     const config = new DocumentBuilder()
-      .setTitle('CconeHub API')
-      .setDescription('The CconeHub API documentation')
+      .setTitle('AXENTYC API')
+      .setDescription('The AXENTYC API documentation')
       .setVersion('1.0')
       .addBearerAuth()
       .build();

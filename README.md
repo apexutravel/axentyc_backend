@@ -1,6 +1,6 @@
-# CconeHub Backend API
+# AXENTYC Backend API
 
-Backend API para CconeHub construido con NestJS, Mongoose, MongoDB y JWT Authentication.
+Backend API para AXENTYC construido con NestJS, Mongoose, MongoDB y JWT Authentication.
 
 ## 📋 Tabla de Contenidos
 
@@ -87,7 +87,7 @@ PORT=3001
 API_PREFIX=api/v1
 
 # Database - MongoDB
-MONGODB_URI=mongodb://localhost:27017/cconehub
+MONGODB_URI=mongodb://localhost:27017/axentyc
 
 # JWT
 JWT_SECRET=your-super-secret-jwt-key-change-this-in-production

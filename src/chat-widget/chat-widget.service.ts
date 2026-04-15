@@ -388,10 +388,10 @@ export class ChatWidgetService {
     const baseUrl = apiUrl || `http://localhost:${port}`;
     
     return `
-<!-- CconeHub Chat Widget -->
+<!-- AXENTYC Chat Widget -->
 <script>
   (function() {
-    window.CconeHubWidget = {
+    window.AXENTYCWidget = {
       widgetId: '${widgetId}',
       apiUrl: '${baseUrl}/${apiPrefix}'
     };

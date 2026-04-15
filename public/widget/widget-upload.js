@@ -3,8 +3,8 @@ async function handleFileUpload(event) {
   const file = event.target.files?.[0];
   if (!file) return;
 
-  const fileInput = document.getElementById('cconehub-file-input');
-  const attachBtn = document.getElementById('cconehub-attach-btn');
+  const fileInput = document.getElementById('axentyc-file-input');
+  const attachBtn = document.getElementById('axentyc-attach-btn');
   
   // Show loading state
   if (attachBtn) {
@@ -34,8 +34,8 @@ async function handleFileUpload(event) {
 
     // Send message with file
     const isImage = file.type.startsWith('image/');
-    const visitorName = localStorage.getItem('cconehub_visitor_name');
-    const visitorEmail = localStorage.getItem('cconehub_visitor_email');
+    const visitorName = localStorage.getItem('axentyc_visitor_name');
+    const visitorEmail = localStorage.getItem('axentyc_visitor_email');
 
     const response = await fetch(`${apiUrl}/chat-widget/message`, {
       method: 'POST',
