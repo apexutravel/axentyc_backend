@@ -81,7 +81,7 @@ export class FacebookService {
       { upsert: true, new: true },
     );
 
-    this.logger.log(`Facebook config saved for tenant ${tenantId} (secret ${appSecret ? 'updated' : 'preserved'})`);
+    this.logger.log(`Facebook config saved for tenant ${tenantId} (secret ${appSecret && !appSecret.includes('•') ? 'updated — starts with: ' + appSecret.substring(0, 4) + '...' : 'preserved'})`);
     return config;
   }
 

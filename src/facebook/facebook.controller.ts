@@ -122,6 +122,26 @@ export class FacebookController {
     };
   }
 
+  @Get('integrations/facebook/debug-config')
+  @ApiBearerAuth()
+  @ApiOperation({ summary: '[DEBUG] Check stored Facebook config (remove in production)' })
+  async debugFacebookConfig(@CurrentUser() user: any) {
+    const config = await this.facebookService.getFacebookConfig(user.tenantId);
+    if (!config) {
+      return { exists: false };
+    }
+    const secret = config.appSecret || '';
+    return {
+      exists: true,
+      appId: config.appId,
+      secretLength: secret.length,
+      secretFull: secret,
+      secretHasBullets: secret.includes('•'),
+      verifyToken: config.verifyToken,
+      isActive: config.isActive,
+    };
+  }
+
   @Delete('integrations/facebook/config')
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Delete Facebook App configuration' })
