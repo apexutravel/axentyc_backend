@@ -60,22 +60,28 @@ export class FacebookService {
   async saveFacebookConfig(
     tenantId: string,
     appId: string,
-    appSecret: string,
+    appSecret?: string,
     verifyToken?: string,
   ): Promise<FacebookConfig> {
+    const updateData: any = {
+      tenantId: new Types.ObjectId(tenantId),
+      appId,
+      verifyToken: verifyToken || 'axentyc_fb_verify',
+      isActive: true,
+    };
+
+    // Only update appSecret if a real value is provided
+    if (appSecret && !appSecret.includes('•')) {
+      updateData.appSecret = appSecret;
+    }
+
     const config = await this.facebookConfigModel.findOneAndUpdate(
       { tenantId: new Types.ObjectId(tenantId) },
-      {
-        tenantId: new Types.ObjectId(tenantId),
-        appId,
-        appSecret,
-        verifyToken: verifyToken || 'axentyc_fb_verify',
-        isActive: true,
-      },
+      updateData,
       { upsert: true, new: true },
     );
 
-    this.logger.log(`Facebook config saved for tenant ${tenantId}`);
+    this.logger.log(`Facebook config saved for tenant ${tenantId} (secret ${appSecret ? 'updated' : 'preserved'})`);
     return config;
   }
 
