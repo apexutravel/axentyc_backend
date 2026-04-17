@@ -297,7 +297,7 @@ export class FacebookService {
       throw new BadRequestException('Invalid mode');
     }
 
-    // Check if token matches any tenant's verify token
+    // Check if token matches any tenant's verify token in DB
     const config = await this.facebookConfigModel.findOne({
       verifyToken: token,
       isActive: true,

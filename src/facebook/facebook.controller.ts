@@ -103,16 +103,22 @@ export class FacebookController {
   @Get('integrations/facebook/config')
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Get Facebook App configuration' })
-  async getFacebookConfig(@CurrentUser() user: any) {
+  async getFacebookConfig(@CurrentUser() user: any, @Req() req: Request) {
     const config = await this.facebookService.getFacebookConfig(user.tenantId);
     if (!config) {
       return { exists: false };
     }
+
+    const protocol = req.headers['x-forwarded-proto'] || req.protocol || 'https';
+    const host = req.headers['x-forwarded-host'] || req.get('host');
+    const prefix = this.configService.get('API_PREFIX') || 'api/v1';
+    const webhookUrl = `${protocol}://${host}/${prefix}/webhook/facebook`;
+
     return {
       exists: true,
       appId: config.appId,
       verifyToken: config.verifyToken,
-      webhookUrl: `${this.configService.get('API_URL')}/${this.configService.get('API_PREFIX') || 'api/v1'}/webhook/facebook`,
+      webhookUrl,
     };
   }
 
