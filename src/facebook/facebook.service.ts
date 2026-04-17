@@ -52,7 +52,7 @@ export class FacebookService {
   }
 
   get graphApiUrl(): string {
-    return 'https://graph.facebook.com/v19.0';
+    return 'https://graph.facebook.com/v21.0';
   }
 
   // ─── Config Management ───
@@ -108,7 +108,7 @@ export class FacebookService {
       'pages_read_engagement',
     ].join(',');
 
-    return `https://www.facebook.com/v19.0/dialog/oauth?client_id=${config.appId}&redirect_uri=${encodeURIComponent(redirectUri)}&scope=${scopes}&response_type=code&state=${tenantId}`;
+    return `https://www.facebook.com/v21.0/dialog/oauth?client_id=${config.appId}&redirect_uri=${encodeURIComponent(redirectUri)}&scope=${scopes}&response_type=code&state=${tenantId}`;
   }
 
   async exchangeCodeForToken(tenantId: string, code: string, redirectUri: string): Promise<{
@@ -120,13 +120,15 @@ export class FacebookService {
       throw new BadRequestException('No Facebook configuration found for this tenant');
     }
 
+    this.logger.log(`Exchange token - appId: ${config.appId}, secret length: ${config.appSecret?.length}, redirectUri: ${redirectUri}`);
+
     const url = `${this.graphApiUrl}/oauth/access_token?client_id=${config.appId}&client_secret=${config.appSecret}&redirect_uri=${encodeURIComponent(redirectUri)}&code=${code}`;
 
     const response = await fetch(url);
     const data = await response.json() as any;
 
     if (data.error) {
-      this.logger.error('Facebook OAuth error:', data.error);
+      this.logger.error(`Facebook OAuth error: ${JSON.stringify(data.error)}`);
       throw new BadRequestException(data.error.message || 'Failed to exchange code');
     }
 
@@ -151,8 +153,11 @@ export class FacebookService {
     const data = await response.json() as any;
 
     if (data.error) {
-      throw new BadRequestException(data.error.message || 'Failed to get long-lived token');
+      this.logger.warn(`Long-lived token error: ${JSON.stringify(data.error)} — falling back to short-lived token`);
+      return { accessToken: shortLivedToken, expiresIn: 3600 };
     }
+
+    this.logger.log(`Long-lived token obtained, expires in ${data.expires_in}s`);
 
     return {
       accessToken: data.access_token,
@@ -163,14 +168,19 @@ export class FacebookService {
   async getUserPages(userAccessToken: string): Promise<any[]> {
     const url = `${this.graphApiUrl}/me/accounts?access_token=${userAccessToken}&fields=id,name,access_token,picture,category,fan_count`;
 
+    this.logger.log(`Fetching pages with token: ${userAccessToken?.substring(0, 15)}...`);
+
     const response = await fetch(url);
     const data = await response.json() as any;
 
+    this.logger.log(`Facebook /me/accounts response: ${JSON.stringify({ data: data.data?.length ?? 0, error: data.error || null })}`);
+
     if (data.error) {
+      this.logger.error(`getUserPages error: ${JSON.stringify(data.error)}`);
       throw new BadRequestException(data.error.message || 'Failed to get pages');
     }
 
-    return (data.data || []).map((page: any) => ({
+    const pages = (data.data || []).map((page: any) => ({
       id: page.id,
       name: page.name,
       accessToken: page.access_token,
@@ -178,6 +188,9 @@ export class FacebookService {
       category: page.category,
       fanCount: page.fan_count,
     }));
+
+    this.logger.log(`Found ${pages.length} pages: ${pages.map((p: any) => p.name).join(', ')}`);
+    return pages;
   }
 
   // ─── Connect / Disconnect ───
