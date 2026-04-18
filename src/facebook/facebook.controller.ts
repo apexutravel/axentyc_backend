@@ -142,6 +142,33 @@ export class FacebookController {
     };
   }
 
+  @Get('integrations/facebook/test-pages')
+  @ApiBearerAuth()
+  @ApiOperation({ summary: '[DEBUG] Test fetching pages with a user token' })
+  async testFetchPages(@CurrentUser() user: any, @Query('token') userToken: string) {
+    if (!userToken) {
+      return { error: 'Provide ?token=YOUR_USER_ACCESS_TOKEN' };
+    }
+
+    try {
+      const pages = await this.facebookService.getUserPages(userToken);
+      return {
+        success: true,
+        pagesCount: pages.length,
+        pages,
+        message: pages.length === 0 
+          ? 'Facebook returned 0 pages. The user may not be admin of any page, or pages were not selected during OAuth.'
+          : `Found ${pages.length} page(s)`,
+      };
+    } catch (e: any) {
+      return {
+        success: false,
+        error: e.message,
+        details: e.response?.data || e,
+      };
+    }
+  }
+
   @Delete('integrations/facebook/config')
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Delete Facebook App configuration' })

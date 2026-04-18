@@ -126,15 +126,17 @@ export class FacebookService {
       throw new BadRequestException('No Facebook configuration found for this tenant');
     }
 
-    this.logger.log(`Exchange token - appId: ${config.appId}, secret length: ${config.appSecret?.length}, redirectUri: ${redirectUri}`);
+    this.logger.log(`[exchangeCodeForToken] Starting - appId: ${config.appId}, secret length: ${config.appSecret?.length}, redirectUri: ${redirectUri}`);
 
     const url = `${this.graphApiUrl}/oauth/access_token?client_id=${config.appId}&client_secret=${config.appSecret}&redirect_uri=${encodeURIComponent(redirectUri)}&code=${code}`;
 
     const response = await fetch(url);
     const data = await response.json() as any;
 
+    this.logger.log(`[exchangeCodeForToken] Facebook response: ${JSON.stringify({ hasToken: !!data.access_token, expiresIn: data.expires_in, error: data.error || null })}`);
+
     if (data.error) {
-      this.logger.error(`Facebook OAuth error: ${JSON.stringify(data.error)}`);
+      this.logger.error(`[exchangeCodeForToken] Facebook OAuth error: ${JSON.stringify(data.error)}`);
       throw new BadRequestException(data.error.message || 'Failed to exchange code');
     }
 
@@ -174,15 +176,16 @@ export class FacebookService {
   async getUserPages(userAccessToken: string): Promise<any[]> {
     const url = `${this.graphApiUrl}/me/accounts?access_token=${userAccessToken}&fields=id,name,access_token,picture,category,fan_count`;
 
-    this.logger.log(`Fetching pages with token: ${userAccessToken?.substring(0, 15)}...`);
+    this.logger.log(`[getUserPages] Fetching pages with token: ${userAccessToken?.substring(0, 15)}...`);
+    this.logger.log(`[getUserPages] Full URL: ${url.replace(userAccessToken, 'TOKEN_HIDDEN')}`);
 
     const response = await fetch(url);
     const data = await response.json() as any;
 
-    this.logger.log(`Facebook /me/accounts response: ${JSON.stringify({ data: data.data?.length ?? 0, error: data.error || null })}`);
+    this.logger.log(`[getUserPages] Raw Facebook response: ${JSON.stringify(data)}`);
 
     if (data.error) {
-      this.logger.error(`getUserPages error: ${JSON.stringify(data.error)}`);
+      this.logger.error(`[getUserPages] Facebook API error: ${JSON.stringify(data.error)}`);
       throw new BadRequestException(data.error.message || 'Failed to get pages');
     }
 
@@ -195,7 +198,7 @@ export class FacebookService {
       fanCount: page.fan_count,
     }));
 
-    this.logger.log(`Found ${pages.length} pages: ${pages.map((p: any) => p.name).join(', ')}`);
+    this.logger.log(`[getUserPages] Mapped ${pages.length} pages: ${JSON.stringify(pages.map((p: any) => ({ id: p.id, name: p.name })))}`);
     return pages;
   }
 
