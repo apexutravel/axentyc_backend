@@ -126,6 +126,9 @@ export class FacebookService {
       'pages_show_list',
       'pages_manage_metadata',
       'pages_read_engagement',
+      'instagram_basic',
+      'instagram_manage_messages',
+      'instagram_manage_comments',
     ].join(',');
 
     return `https://www.facebook.com/v21.0/dialog/oauth?client_id=${config.appId}&redirect_uri=${encodeURIComponent(redirectUri)}&scope=${scopes}&response_type=code&state=${tenantId}`;
@@ -188,7 +191,7 @@ export class FacebookService {
   }
 
   async getUserPages(userAccessToken: string): Promise<any[]> {
-    const url = `${this.graphApiUrl}/me/accounts?access_token=${userAccessToken}&fields=id,name,access_token,picture,category,fan_count`;
+    const url = `${this.graphApiUrl}/me/accounts?access_token=${userAccessToken}&fields=id,name,access_token,picture,category,fan_count,instagram_business_account`;
 
     this.logger.log(`[getUserPages] Fetching pages with token: ${userAccessToken?.substring(0, 15)}...`);
     this.logger.log(`[getUserPages] Full URL: ${url.replace(userAccessToken, 'TOKEN_HIDDEN')}`);
@@ -203,17 +206,54 @@ export class FacebookService {
       throw new BadRequestException(data.error.message || 'Failed to get pages');
     }
 
-    const pages = (data.data || []).map((page: any) => ({
-      id: page.id,
-      name: page.name,
-      accessToken: page.access_token,
-      picture: page.picture?.data?.url,
-      category: page.category,
-      fanCount: page.fan_count,
+    const pages = await Promise.all((data.data || []).map(async (page: any) => {
+      let instagramAccount = null;
+      
+      // Check if page has Instagram Business Account linked
+      if (page.instagram_business_account?.id) {
+        try {
+          const igData = await this.getInstagramAccountInfo(
+            page.instagram_business_account.id,
+            page.access_token
+          );
+          instagramAccount = igData;
+        } catch (err) {
+          this.logger.warn(`Failed to get Instagram info for page ${page.id}: ${err.message}`);
+        }
+      }
+
+      return {
+        id: page.id,
+        name: page.name,
+        accessToken: page.access_token,
+        picture: page.picture?.data?.url,
+        category: page.category,
+        fanCount: page.fan_count,
+        instagramAccount,
+      };
     }));
 
-    this.logger.log(`[getUserPages] Mapped ${pages.length} pages: ${JSON.stringify(pages.map((p: any) => ({ id: p.id, name: p.name })))}`);
+    this.logger.log(`[getUserPages] Mapped ${pages.length} pages: ${JSON.stringify(pages.map((p: any) => ({ id: p.id, name: p.name, hasInstagram: !!p.instagramAccount })))}`);
     return pages;
+  }
+
+  private async getInstagramAccountInfo(igAccountId: string, pageAccessToken: string): Promise<any> {
+    const url = `${this.graphApiUrl}/${igAccountId}?fields=id,username,name,profile_picture_url,followers_count&access_token=${pageAccessToken}`;
+    
+    const response = await fetch(url);
+    const data = await response.json() as any;
+
+    if (data.error) {
+      throw new Error(data.error.message);
+    }
+
+    return {
+      id: data.id,
+      username: data.username,
+      name: data.name,
+      profilePicture: data.profile_picture_url,
+      followersCount: data.followers_count,
+    };
   }
 
   // ─── Connect / Disconnect ───
@@ -225,10 +265,18 @@ export class FacebookService {
     pageAccessToken: string,
     metadata?: Record<string, any>,
   ): Promise<SocialAccount> {
-    // Subscribe page to webhook
+    // Subscribe page to webhook (includes Instagram if linked)
     await this.subscribePageToWebhook(pageId, pageAccessToken);
 
-    // Upsert social account
+    // Check if page has Instagram linked
+    const instagramAccount = metadata?.instagramAccount;
+    if (instagramAccount?.id) {
+      this.logger.log(`Instagram account @${instagramAccount.username} detected for page ${pageId}`);
+      // Subscribe Instagram to webhook
+      await this.subscribeInstagramToWebhook(instagramAccount.id, pageAccessToken);
+    }
+
+    // Upsert Facebook page account
     const account = await this.socialAccountModel.findOneAndUpdate(
       {
         tenantId: new Types.ObjectId(tenantId),
@@ -248,6 +296,36 @@ export class FacebookService {
       },
       { upsert: true, new: true },
     );
+
+    // If Instagram is linked, create separate Instagram account entry
+    if (instagramAccount?.id) {
+      await this.socialAccountModel.findOneAndUpdate(
+        {
+          tenantId: new Types.ObjectId(tenantId),
+          platform: SocialPlatform.INSTAGRAM,
+          accountId: instagramAccount.id,
+        },
+        {
+          tenantId: new Types.ObjectId(tenantId),
+          platform: SocialPlatform.INSTAGRAM,
+          accountName: instagramAccount.username,
+          accountId: instagramAccount.id,
+          pageId, // Link back to Facebook page
+          accessToken: pageAccessToken, // Same token as page
+          status: SocialAccountStatus.CONNECTED,
+          tokenExpiresAt: new Date(Date.now() + 60 * 24 * 60 * 60 * 1000),
+          metadata: {
+            name: instagramAccount.name,
+            profilePicture: instagramAccount.profilePicture,
+            followersCount: instagramAccount.followersCount,
+            linkedPageId: pageId,
+          },
+          isActive: true,
+        },
+        { upsert: true, new: true },
+      );
+      this.logger.log(`Instagram account @${instagramAccount.username} connected for tenant ${tenantId}`);
+    }
 
     this.logger.log(`Facebook page "${pageName}" (${pageId}) connected for tenant ${tenantId}`);
     return account;
@@ -326,6 +404,26 @@ export class FacebookService {
     this.logger.log(`Page ${pageId} unsubscribed from webhook events`);
   }
 
+  private async subscribeInstagramToWebhook(igAccountId: string, pageAccessToken: string): Promise<void> {
+    const url = `${this.graphApiUrl}/${igAccountId}/subscribed_apps`;
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        access_token: pageAccessToken,
+        subscribed_fields: ['messages', 'messaging_postbacks', 'message_reads'],
+      }),
+    });
+
+    const data = await response.json() as any;
+    if (data.error) {
+      this.logger.error('Failed to subscribe Instagram to webhook:', data.error);
+      throw new BadRequestException(data.error.message || 'Failed to subscribe Instagram');
+    }
+
+    this.logger.log(`Instagram account ${igAccountId} subscribed to webhook events`);
+  }
+
   // ─── Webhook Handler ───
 
   async verifyWebhook(mode: string, token: string, challenge: string): Promise<string> {
@@ -345,25 +443,29 @@ export class FacebookService {
   }
 
   async handleWebhook(body: any): Promise<void> {
-    if (body.object !== 'page') {
-      this.logger.warn('Received non-page webhook event');
-      return;
+    // Handle both Facebook Page and Instagram webhooks
+    if (body.object === 'page') {
+      await this.handlePageWebhook(body);
+    } else if (body.object === 'instagram') {
+      await this.handleInstagramWebhook(body);
+    } else {
+      this.logger.warn(`Received unknown webhook object type: ${body.object}`);
     }
+  }
 
+  private async handlePageWebhook(body: any): Promise<void> {
     for (const entry of body.entry || []) {
       const pageId = entry.id;
 
       for (const event of entry.messaging || []) {
         try {
           if (event.message && !event.message.is_echo) {
-            await this.handleIncomingMessage(pageId, event);
+            await this.handleIncomingMessage(pageId, event, 'facebook');
           } else if (event.message?.is_echo) {
-            // Echo of our own sent message, skip
             this.logger.debug('Received echo, skipping');
           } else if (event.read) {
             await this.handleMessageRead(pageId, event);
           } else if (event.delivery) {
-            // Delivery receipt - log only
             this.logger.debug('Message delivered');
           } else if (event.postback) {
             await this.handlePostback(pageId, event);
@@ -375,7 +477,25 @@ export class FacebookService {
     }
   }
 
-  private async handleIncomingMessage(pageId: string, event: any): Promise<void> {
+  private async handleInstagramWebhook(body: any): Promise<void> {
+    for (const entry of body.entry || []) {
+      const igAccountId = entry.id;
+
+      for (const event of entry.messaging || []) {
+        try {
+          if (event.message && !event.message.is_echo) {
+            await this.handleIncomingMessage(igAccountId, event, 'instagram');
+          } else if (event.read) {
+            await this.handleMessageRead(igAccountId, event);
+          }
+        } catch (err) {
+          this.logger.error(`Error processing Instagram webhook event for account ${igAccountId}:`, err);
+        }
+      }
+    }
+  }
+
+  private async handleIncomingMessage(accountId: string, event: any, platform: 'facebook' | 'instagram'): Promise<void> {
     const senderId = event.sender?.id;
     const recipientId = event.recipient?.id;
     const timestamp = event.timestamp;
@@ -383,31 +503,34 @@ export class FacebookService {
 
     if (!senderId || !message) return;
 
-    this.logger.log(`Incoming FB message from ${senderId} to page ${pageId}`);
+    this.logger.log(`Incoming ${platform} message from ${senderId} to account ${accountId}`);
 
-    // Find the social account for this page
+    // Find the social account (Facebook page or Instagram account)
     const account = await this.socialAccountModel.findOne({
-      pageId: recipientId || pageId,
-      platform: SocialPlatform.FACEBOOK,
+      $or: [
+        { pageId: recipientId || accountId, platform: platform === 'facebook' ? SocialPlatform.FACEBOOK : SocialPlatform.INSTAGRAM },
+        { accountId: recipientId || accountId, platform: platform === 'facebook' ? SocialPlatform.FACEBOOK : SocialPlatform.INSTAGRAM },
+      ],
       status: SocialAccountStatus.CONNECTED,
     });
 
     if (!account) {
-      this.logger.warn(`No connected Facebook account found for page ${pageId}`);
+      this.logger.warn(`No connected ${platform} account found for ${accountId}`);
       return;
     }
 
     const tenantId = account.tenantId.toString();
 
     // Get or create contact
-    const contact = await this.getOrCreateContact(tenantId, senderId, account.accessToken);
+    const contact = await this.getOrCreateContact(tenantId, senderId, account.accessToken, platform);
 
     // Get or create conversation
     const conversation = await this.getOrCreateConversation(
       tenantId,
       contact._id.toString(),
       senderId,
-      pageId,
+      accountId,
+      platform,
     );
 
     // Determine message type and content
@@ -494,7 +617,7 @@ export class FacebookService {
         ...event,
         message: { text: payload, mid: `postback_${Date.now()}` },
       };
-      await this.handleIncomingMessage(pageId, fakeMessage);
+      await this.handleIncomingMessage(pageId, fakeMessage, 'facebook');
     }
   }
 
@@ -581,17 +704,19 @@ export class FacebookService {
     tenantId: string,
     senderId: string,
     pageAccessToken?: string,
+    platform: 'facebook' | 'instagram' = 'facebook',
   ): Promise<ContactDocument> {
-    // Check if contact exists by FB PSID
+    // Check if contact exists by PSID (works for both FB and IG)
+    const psidField = platform === 'instagram' ? 'customFields.instagramPsid' : 'customFields.facebookPsid';
     let contact = await this.contactModel.findOne({
       tenantId: new Types.ObjectId(tenantId),
-      'customFields.facebookPsid': senderId,
+      [psidField]: senderId,
     });
 
     if (contact) return contact;
 
-    // Get profile from Facebook
-    let name = `Facebook User ${senderId.slice(-4)}`;
+    // Get profile from Facebook/Instagram
+    let name = `${platform === 'instagram' ? 'Instagram' : 'Facebook'} User ${senderId.slice(-4)}`;
     let profilePic: string | undefined;
 
     if (pageAccessToken) {
@@ -604,20 +729,23 @@ export class FacebookService {
           profilePic = profile.profile_pic;
         }
       } catch (e) {
-        this.logger.warn(`Failed to get FB profile for ${senderId}`);
+        this.logger.warn(`Failed to get ${platform} profile for ${senderId}`);
       }
     }
 
     // Create contact
+    const tags = platform === 'instagram' ? ['instagram'] : ['facebook', 'messenger'];
+    const customFields = platform === 'instagram' 
+      ? { instagramPsid: senderId }
+      : { facebookPsid: senderId };
+
     contact = new this.contactModel({
       tenantId: new Types.ObjectId(tenantId),
       name,
-      source: ContactSource.FACEBOOK || 'facebook',
+      source: platform === 'instagram' ? ContactSource.INSTAGRAM : ContactSource.FACEBOOK,
       avatar: profilePic,
-      tags: ['facebook', 'messenger'],
-      customFields: {
-        facebookPsid: senderId,
-      },
+      tags,
+      customFields,
     });
 
     return contact.save();
@@ -627,29 +755,43 @@ export class FacebookService {
     tenantId: string,
     contactId: string,
     senderId: string,
-    pageId: string,
+    accountId: string,
+    platform: 'facebook' | 'instagram' = 'facebook',
   ): Promise<any> {
+    const channel = platform === 'instagram' ? ConversationChannel.INSTAGRAM : ConversationChannel.FACEBOOK;
+    
     // Try to find existing conversation
     const existing = await this.conversationModel.findOne({
       tenantId: new Types.ObjectId(tenantId),
-      channel: ConversationChannel.FACEBOOK,
+      channel,
       'metadata.externalId': senderId,
-      'metadata.pageId': pageId,
+      $or: [
+        { 'metadata.pageId': accountId },
+        { 'metadata.accountId': accountId },
+      ],
     });
 
     if (existing) return existing;
 
     // Create new conversation
+    const subject = platform === 'instagram' ? 'Instagram DM' : 'Facebook Messenger';
+    const metadata: any = {
+      externalId: senderId,
+    };
+    
+    if (platform === 'instagram') {
+      metadata.accountId = accountId;
+    } else {
+      metadata.pageId = accountId;
+    }
+
     const newConversation = new this.conversationModel({
       tenantId: new Types.ObjectId(tenantId),
       contactId: new Types.ObjectId(contactId),
-      channel: ConversationChannel.FACEBOOK,
-      subject: 'Facebook Messenger',
+      channel,
+      subject,
       status: ConversationStatus.OPEN,
-      metadata: {
-        externalId: senderId,
-        pageId,
-      },
+      metadata,
     });
     return newConversation.save();
   }
