@@ -1012,7 +1012,7 @@ export class FacebookService {
       channel: ConversationChannel.FACEBOOK,
       'metadata.postId': postId,
       'metadata.pageId': pageId,
-    });
+    }).populate('contactId');
 
     if (existing) return existing;
 
@@ -1030,7 +1030,8 @@ export class FacebookService {
         externalId: commenterId,
       },
     });
-    return newConversation.save();
+    const saved = await newConversation.save();
+    return saved.populate('contactId');
   }
 
   private async getOrCreateInstagramCommentConversation(
@@ -1046,7 +1047,7 @@ export class FacebookService {
       channel: ConversationChannel.INSTAGRAM,
       'metadata.mediaId': mediaId,
       'metadata.accountId': igAccountId,
-    });
+    }).populate('contactId');
 
     if (existing) return existing;
 
@@ -1064,6 +1065,7 @@ export class FacebookService {
         externalId: commenterId,
       },
     });
-    return newConversation.save();
+    const saved = await newConversation.save();
+    return saved.populate('contactId');
   }
 }

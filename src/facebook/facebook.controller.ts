@@ -58,6 +58,9 @@ export class FacebookController {
     @Body() body: any,
     @Req() req: Request,
   ) {
+    // Log incoming webhook for debugging
+    this.logger.log(`📥 Webhook received: ${JSON.stringify(body, null, 2)}`);
+
     // Verify signature if app secret is configured
     const appSecret = this.configService.get<string>('FACEBOOK_APP_SECRET');
     const signature = req.headers['x-hub-signature-256'] as string;
