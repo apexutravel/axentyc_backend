@@ -383,7 +383,7 @@ export class FacebookService {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         access_token: pageAccessToken,
-        subscribed_fields: ['messages', 'messaging_postbacks', 'message_reads', 'message_deliveries'],
+        subscribed_fields: ['messages', 'messaging_postbacks', 'message_reads', 'message_deliveries', 'feed'],
       }),
     });
 
@@ -409,7 +409,7 @@ export class FacebookService {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         access_token: pageAccessToken,
-        subscribed_fields: ['messages', 'messaging_postbacks', 'message_reads'],
+        subscribed_fields: ['messages', 'messaging_postbacks', 'message_reads', 'comments', 'mentions'],
       }),
     });
 
