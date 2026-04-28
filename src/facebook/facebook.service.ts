@@ -43,7 +43,21 @@ export class FacebookService {
     private eventsGateway: EventsGateway,
   ) {}
 
-  // Get tenant-specific Facebook config from database
+  // Get global Facebook app config from environment variables
+  private getGlobalAppConfig(): { appId: string; appSecret: string; verifyToken: string } | null {
+    const appId = this.configService.get<string>('FACEBOOK_APP_ID');
+    const appSecret = this.configService.get<string>('FACEBOOK_APP_SECRET');
+    const verifyToken = this.configService.get<string>('FACEBOOK_VERIFY_TOKEN') || 'axentyc_fb_verify';
+
+    if (!appId || !appSecret) {
+      this.logger.warn('Facebook app credentials not configured in environment variables');
+      return null;
+    }
+
+    return { appId, appSecret, verifyToken };
+  }
+
+  // Get tenant-specific Facebook config from database (DEPRECATED - kept for migration)
   private async getTenantConfig(tenantId: string): Promise<FacebookConfigDocument | null> {
     return this.facebookConfigModel.findOne({
       tenantId: new Types.ObjectId(tenantId),
@@ -101,9 +115,9 @@ export class FacebookService {
   // ─── OAuth Flow ───
 
   async getOAuthUrl(tenantId: string, redirectUri: string): Promise<string | null> {
-    const config = await this.getTenantConfig(tenantId);
+    const config = this.getGlobalAppConfig();
     if (!config) {
-      this.logger.warn(`No Facebook config found for tenant ${tenantId}`);
+      this.logger.warn('Facebook app not configured');
       return null;
     }
 
@@ -121,9 +135,9 @@ export class FacebookService {
     accessToken: string;
     expiresIn: number;
   }> {
-    const config = await this.getTenantConfig(tenantId);
+    const config = this.getGlobalAppConfig();
     if (!config) {
-      throw new BadRequestException('No Facebook configuration found for this tenant');
+      throw new BadRequestException('Facebook app not configured');
     }
 
     this.logger.log(`[exchangeCodeForToken] Starting - appId: ${config.appId}, secret length: ${config.appSecret?.length}, redirectUri: ${redirectUri}`);
@@ -150,9 +164,9 @@ export class FacebookService {
     accessToken: string;
     expiresIn: number;
   }> {
-    const config = await this.getTenantConfig(tenantId);
+    const config = this.getGlobalAppConfig();
     if (!config) {
-      throw new BadRequestException('No Facebook configuration found for this tenant');
+      throw new BadRequestException('Facebook app not configured');
     }
 
     const url = `${this.graphApiUrl}/oauth/access_token?grant_type=fb_exchange_token&client_id=${config.appId}&client_secret=${config.appSecret}&fb_exchange_token=${shortLivedToken}`;
@@ -319,18 +333,14 @@ export class FacebookService {
       throw new BadRequestException('Invalid mode');
     }
 
-    // Check if token matches any tenant's verify token in DB
-    const config = await this.facebookConfigModel.findOne({
-      verifyToken: token,
-      isActive: true,
-    });
-
-    if (config) {
-      this.logger.log(`Facebook webhook verified for tenant ${config.tenantId}`);
+    // Check global verify token from env
+    const globalConfig = this.getGlobalAppConfig();
+    if (globalConfig && token === globalConfig.verifyToken) {
+      this.logger.log('Facebook webhook verified with global token');
       return challenge;
     }
 
-    this.logger.warn(`Webhook verification failed - token not found: ${token}`);
+    this.logger.warn(`Webhook verification failed - token mismatch: ${token}`);
     throw new BadRequestException('Webhook verification failed');
   }
 

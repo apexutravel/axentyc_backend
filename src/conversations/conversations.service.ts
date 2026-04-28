@@ -52,6 +52,7 @@ export class ConversationsService {
   async findAll(tenantId: string, filters?: {
     status?: string;
     channel?: string;
+    channels?: string;
     assignedTo?: string;
     tags?: string[];
   }): Promise<Conversation[]> {
@@ -59,6 +60,11 @@ export class ConversationsService {
 
     if (filters?.status) query.status = filters.status;
     if (filters?.channel) query.channel = filters.channel;
+    if (filters?.channels) {
+      // Support multiple channels: "web_chat,facebook,instagram"
+      const channelList = filters.channels.split(',').map(c => c.trim());
+      query.channel = { $in: channelList };
+    }
     if (filters?.assignedTo) query.assignedTo = new Types.ObjectId(filters.assignedTo);
     if (filters?.tags?.length) query.tags = { $in: filters.tags };
 

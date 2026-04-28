@@ -102,11 +102,16 @@ export class FacebookController {
 
   @Get('integrations/facebook/config')
   @ApiBearerAuth()
-  @ApiOperation({ summary: 'Get Facebook App configuration' })
+  @ApiOperation({ summary: 'Check if Facebook integration is available (global app config)' })
   async getFacebookConfig(@CurrentUser() user: any, @Req() req: Request) {
-    const config = await this.facebookService.getFacebookConfig(user.tenantId);
-    if (!config) {
-      return { exists: false };
+    // Check if global Facebook app is configured in environment
+    const isConfigured = !!this.configService.get('FACEBOOK_APP_ID') && !!this.configService.get('FACEBOOK_APP_SECRET');
+    
+    if (!isConfigured) {
+      return { 
+        available: false,
+        message: 'Facebook integration not configured by administrator'
+      };
     }
 
     const protocol = req.headers['x-forwarded-proto'] || req.protocol || 'https';
@@ -115,10 +120,9 @@ export class FacebookController {
     const webhookUrl = `${protocol}://${host}/${prefix}/webhook/facebook`;
 
     return {
-      exists: true,
-      appId: config.appId,
-      verifyToken: config.verifyToken,
+      available: true,
       webhookUrl,
+      verifyToken: this.configService.get('FACEBOOK_VERIFY_TOKEN') || 'axentyc_fb_verify',
     };
   }
 

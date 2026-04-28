@@ -62,3 +62,4 @@ export class SocialAccount {
 export const SocialAccountSchema = SchemaFactory.createForClass(SocialAccount);
 
 SocialAccountSchema.index({ tenantId: 1, platform: 1 });
+SocialAccountSchema.index({ pageId: 1 }); // For fast lookup when webhook arrives

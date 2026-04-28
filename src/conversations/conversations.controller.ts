@@ -31,16 +31,19 @@ export class ConversationsController {
   @ApiOperation({ summary: 'Get all conversations (inbox)' })
   @ApiQuery({ name: 'status', required: false })
   @ApiQuery({ name: 'channel', required: false })
+  @ApiQuery({ name: 'channels', required: false, description: 'Comma-separated list of channels' })
   @ApiQuery({ name: 'assignedTo', required: false })
   findAll(
     @CurrentUser() user: any,
     @Query('status') status?: string,
     @Query('channel') channel?: string,
+    @Query('channels') channels?: string,
     @Query('assignedTo') assignedTo?: string,
   ) {
     return this.conversationsService.findAll(user.tenantId, {
       status,
       channel,
+      channels,
       assignedTo,
     });
   }
