@@ -455,6 +455,7 @@ export class FacebookService {
     for (const entry of body.entry || []) {
       const pageId = entry.id;
 
+      // Handle messaging events (Messenger DMs)
       for (const event of entry.messaging || []) {
         try {
           if (event.message && !event.message.is_echo) {
@@ -472,6 +473,17 @@ export class FacebookService {
           this.logger.error(`Error processing webhook event for page ${pageId}:`, err);
         }
       }
+
+      // Handle feed events (Comments on posts)
+      for (const change of entry.changes || []) {
+        try {
+          if (change.field === 'feed' && change.value) {
+            await this.handleFeedComment(pageId, change.value);
+          }
+        } catch (err) {
+          this.logger.error(`Error processing feed event for page ${pageId}:`, err);
+        }
+      }
     }
   }
 
@@ -479,6 +491,7 @@ export class FacebookService {
     for (const entry of body.entry || []) {
       const igAccountId = entry.id;
 
+      // Handle messaging events (Instagram DMs)
       for (const event of entry.messaging || []) {
         try {
           if (event.message && !event.message.is_echo) {
@@ -488,6 +501,17 @@ export class FacebookService {
           }
         } catch (err) {
           this.logger.error(`Error processing Instagram webhook event for account ${igAccountId}:`, err);
+        }
+      }
+
+      // Handle comments on Instagram posts
+      for (const change of entry.changes || []) {
+        try {
+          if (change.field === 'comments' && change.value) {
+            await this.handleInstagramComment(igAccountId, change.value);
+          }
+        } catch (err) {
+          this.logger.error(`Error processing Instagram comment for account ${igAccountId}:`, err);
         }
       }
     }
@@ -617,6 +641,187 @@ export class FacebookService {
       };
       await this.handleIncomingMessage(pageId, fakeMessage, 'facebook');
     }
+  }
+
+  private async handleFeedComment(pageId: string, feedData: any): Promise<void> {
+    // Handle comments on Facebook posts
+    const { item, verb, post_id, comment_id, message, from, created_time } = feedData;
+
+    // Only process new comments (verb: 'add') and comment items
+    if (verb !== 'add' || (item !== 'comment' && item !== 'status')) {
+      this.logger.debug(`Skipping feed event: ${verb} ${item}`);
+      return;
+    }
+
+    // If it's a status update (new post), skip it - we only want comments
+    if (item === 'status' && !comment_id) {
+      this.logger.debug('Skipping status update (new post)');
+      return;
+    }
+
+    const commenterId = from?.id;
+    const commenterName = from?.name;
+    const commentText = message || '';
+
+    if (!commenterId || !commentText) {
+      this.logger.warn('Missing commenter ID or comment text');
+      return;
+    }
+
+    this.logger.log(`New comment on post ${post_id} from ${commenterName} (${commenterId})`);
+
+    // Find the social account for this page
+    const account = await this.socialAccountModel.findOne({
+      pageId,
+      platform: SocialPlatform.FACEBOOK,
+      status: SocialAccountStatus.CONNECTED,
+    });
+
+    if (!account) {
+      this.logger.warn(`No connected Facebook account found for page ${pageId}`);
+      return;
+    }
+
+    const tenantId = account.tenantId.toString();
+
+    // Get or create contact for the commenter
+    const contact = await this.getOrCreateContact(tenantId, commenterId, account.accessToken, 'facebook');
+
+    // Get or create conversation for this post's comments
+    const conversation = await this.getOrCreateCommentConversation(
+      tenantId,
+      contact._id.toString(),
+      commenterId,
+      post_id,
+      pageId,
+    );
+
+    // Save the comment as a message
+    const newMessage = new this.messageModel({
+      conversationId: conversation._id,
+      senderId: contact._id,
+      senderType: 'contact',
+      type: 'text',
+      content: commentText,
+      status: 'delivered',
+      metadata: {
+        commentId: comment_id,
+        postId: post_id,
+        platform: 'facebook',
+        isComment: true,
+      },
+      createdAt: created_time ? new Date(created_time * 1000) : new Date(),
+    });
+
+    const savedMessage = await newMessage.save();
+
+    // Update conversation
+    await this.conversationModel.findByIdAndUpdate(conversation._id, {
+      lastMessage: commentText,
+      lastMessageAt: new Date(),
+      status: ConversationStatus.OPEN,
+      $inc: { unreadCount: 1 },
+    });
+
+    // Emit real-time events
+    this.eventsGateway.emitMessageReceived(
+      tenantId,
+      conversation._id.toString(),
+      savedMessage,
+      contact,
+    );
+
+    this.eventsGateway.emitToConversation(
+      conversation._id.toString(),
+      'message.new',
+      savedMessage,
+    );
+
+    this.logger.log(`Comment saved as message in conversation ${conversation._id}`);
+  }
+
+  private async handleInstagramComment(igAccountId: string, commentData: any): Promise<void> {
+    // Handle comments on Instagram posts
+    const { id: commentId, text, from, media } = commentData;
+
+    if (!from?.id || !text) {
+      this.logger.warn('Missing commenter ID or comment text in Instagram comment');
+      return;
+    }
+
+    const commenterId = from.id;
+    const commenterUsername = from.username || 'Instagram User';
+    const mediaId = media?.id; // The post/media that was commented on
+
+    this.logger.log(`New Instagram comment from @${commenterUsername} (${commenterId})`);
+
+    // Find the Instagram account
+    const account = await this.socialAccountModel.findOne({
+      accountId: igAccountId,
+      platform: SocialPlatform.INSTAGRAM,
+      status: SocialAccountStatus.CONNECTED,
+    });
+
+    if (!account) {
+      this.logger.warn(`No connected Instagram account found for ${igAccountId}`);
+      return;
+    }
+
+    const tenantId = account.tenantId.toString();
+
+    // Get or create contact for the commenter
+    const contact = await this.getOrCreateContact(tenantId, commenterId, account.accessToken, 'instagram');
+
+    // Get or create conversation for this post's comments
+    const conversation = await this.getOrCreateInstagramCommentConversation(
+      tenantId,
+      contact._id.toString(),
+      commenterId,
+      mediaId || commentId,
+      igAccountId,
+    );
+
+    // Save the comment as a message
+    const newMessage = new this.messageModel({
+      conversationId: conversation._id,
+      senderId: contact._id,
+      senderType: 'contact',
+      type: 'text',
+      content: text,
+      status: 'delivered',
+      metadata: {
+        commentId,
+        mediaId,
+        platform: 'instagram',
+        isComment: true,
+      },
+    });
+
+    const savedMessage = await newMessage.save();
+
+    // Update conversation
+    await this.conversationModel.findByIdAndUpdate(conversation._id, {
+      lastMessage: text,
+      lastMessageAt: new Date(),
+      status: ConversationStatus.OPEN,
+      $inc: { unreadCount: 1 },
+    });
+
+    // Emit real-time events
+    this.eventsGateway.emitMessageReceived(
+      tenantId,
+      conversation._id.toString(),
+      savedMessage,
+      contact,
+    );
+
+    this.eventsGateway.emitToConversation(
+      conversation._id.toString(),
+      'message.new',
+      savedMessage,
+    );
+
+    this.logger.log(`Instagram comment saved as message in conversation ${conversation._id}`);
   }
 
   // ─── Send Message ───
@@ -790,6 +995,74 @@ export class FacebookService {
       subject,
       status: ConversationStatus.OPEN,
       metadata,
+    });
+    return newConversation.save();
+  }
+
+  private async getOrCreateCommentConversation(
+    tenantId: string,
+    contactId: string,
+    commenterId: string,
+    postId: string,
+    pageId: string,
+  ): Promise<any> {
+    // Try to find existing conversation for this post
+    const existing = await this.conversationModel.findOne({
+      tenantId: new Types.ObjectId(tenantId),
+      channel: ConversationChannel.FACEBOOK,
+      'metadata.postId': postId,
+      'metadata.pageId': pageId,
+    });
+
+    if (existing) return existing;
+
+    // Create new conversation for this post's comments
+    const newConversation = new this.conversationModel({
+      tenantId: new Types.ObjectId(tenantId),
+      contactId: new Types.ObjectId(contactId),
+      channel: ConversationChannel.FACEBOOK,
+      subject: `Comentario en publicación`,
+      status: ConversationStatus.OPEN,
+      metadata: {
+        postId,
+        pageId,
+        isComment: true,
+        externalId: commenterId,
+      },
+    });
+    return newConversation.save();
+  }
+
+  private async getOrCreateInstagramCommentConversation(
+    tenantId: string,
+    contactId: string,
+    commenterId: string,
+    mediaId: string,
+    igAccountId: string,
+  ): Promise<any> {
+    // Try to find existing conversation for this Instagram post
+    const existing = await this.conversationModel.findOne({
+      tenantId: new Types.ObjectId(tenantId),
+      channel: ConversationChannel.INSTAGRAM,
+      'metadata.mediaId': mediaId,
+      'metadata.accountId': igAccountId,
+    });
+
+    if (existing) return existing;
+
+    // Create new conversation for this Instagram post's comments
+    const newConversation = new this.conversationModel({
+      tenantId: new Types.ObjectId(tenantId),
+      contactId: new Types.ObjectId(contactId),
+      channel: ConversationChannel.INSTAGRAM,
+      subject: `Comentario en Instagram`,
+      status: ConversationStatus.OPEN,
+      metadata: {
+        mediaId,
+        accountId: igAccountId,
+        isComment: true,
+        externalId: commenterId,
+      },
     });
     return newConversation.save();
   }
