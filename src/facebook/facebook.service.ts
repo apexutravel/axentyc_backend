@@ -126,8 +126,9 @@ export class FacebookService {
       'pages_show_list',
       'pages_manage_metadata',
       'pages_read_engagement',
-      'instagram_content_publish',
-      'instagram_manage_insights',
+      'instagram_business_basic',
+      'instagram_manage_comments',
+      'instagram_business_manage_messages',
     ].join(',');
 
     return `https://www.facebook.com/v21.0/dialog/oauth?client_id=${config.appId}&redirect_uri=${encodeURIComponent(redirectUri)}&scope=${scopes}&response_type=code&state=${tenantId}`;
