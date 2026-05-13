@@ -289,4 +289,12 @@ export class FacebookController {
 
     return { success: sent };
   }
+
+  @Post('integrations/facebook/resubscribe')
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Re-subscribe all connected pages to webhooks (to update subscription fields)' })
+  async resubscribePages(@CurrentUser() user: any) {
+    const result = await this.facebookService.resubscribeAllPages(user.tenantId);
+    return result;
+  }
 }

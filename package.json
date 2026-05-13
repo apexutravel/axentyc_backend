@@ -34,6 +34,7 @@
     "@socket.io/redis-adapter": "^8.3.0",
     "@types/cookie-parser": "^1.4.10",
     "bcrypt": "^6.0.0",
+    "brace-expansion": "^5.0.6",
     "class-transformer": "^0.5.1",
     "class-validator": "^0.14.4",
     "cookie-parser": "^1.4.7",
@@ -42,7 +43,7 @@
     "ioredis": "^5.10.0",
     "mailparser": "^3.9.4",
     "mongoose": "^9.2.4",
-    "nodemailer": "^6.10.1",
+    "nodemailer": "^8.0.7",
     "passport": "^0.7.0",
     "passport-jwt": "^4.0.1",
     "redis": "^5.11.0",
@@ -93,5 +94,8 @@
     ],
     "coverageDirectory": "../coverage",
     "testEnvironment": "node"
-  }
+  },
+  "overrides": {
+  "@tootallnate/once": "^3.0.1"
+}
 }

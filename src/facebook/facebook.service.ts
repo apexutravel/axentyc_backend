@@ -376,6 +376,32 @@ export class FacebookService {
 
   // ─── Webhook Subscription ───
 
+  async resubscribeAllPages(tenantId: string): Promise<any> {
+    const accounts = await this.socialAccountModel.find({
+      tenantId: new Types.ObjectId(tenantId),
+      platform: SocialPlatform.FACEBOOK,
+      status: SocialAccountStatus.CONNECTED,
+    });
+
+    if (accounts.length === 0) {
+      return { success: false, message: 'No connected Facebook pages found' };
+    }
+
+    const results: any[] = [];
+    for (const account of accounts) {
+      try {
+        await this.subscribePageToWebhook(account.pageId!, account.accessToken!);
+        results.push({ pageId: account.pageId, name: account.accountName, status: 'subscribed' });
+        this.logger.log(`Re-subscribed page ${account.accountName} (${account.pageId}) with feed`);
+      } catch (err: any) {
+        results.push({ pageId: account.pageId, name: account.accountName, status: 'error', error: err.message });
+        this.logger.error(`Failed to re-subscribe page ${account.pageId}:`, err);
+      }
+    }
+
+    return { success: true, results };
+  }
+
   private async subscribePageToWebhook(pageId: string, pageAccessToken: string): Promise<void> {
     const url = `${this.graphApiUrl}/${pageId}/subscribed_apps`;
     const response = await fetch(url, {
