@@ -23,10 +23,12 @@ import { Message, MessageDocument, MessageDirection, MessageType, MessageStatus 
 import { EventsGateway } from '../events/events.gateway';
 import { Contact, ContactDocument, ContactSource } from '../crm/entities/contact.entity';
 import { FacebookConfig, FacebookConfigDocument } from './entities/facebook-config.entity';
+import { randomUUID } from 'crypto';
 
 @Injectable()
 export class FacebookService {
   private readonly logger = new Logger(FacebookService.name);
+  private readonly pendingPageSelections = new Map<string, { tenantId: string; expiresAt: number; pages: any[] }>();
 
   constructor(
     @InjectModel(SocialAccount.name)
@@ -95,7 +97,7 @@ export class FacebookService {
       { upsert: true, new: true },
     );
 
-    this.logger.log(`Facebook config saved for tenant ${tenantId} (secret ${appSecret && !appSecret.includes('•') ? 'updated — starts with: ' + appSecret.substring(0, 4) + '...' : 'preserved'})`);
+    this.logger.log(`Facebook config saved for tenant ${tenantId} (secret ${appSecret && !appSecret.includes('•') ? 'updated' : 'preserved'})`);
     return config;
   }
 
@@ -126,10 +128,20 @@ export class FacebookService {
       'pages_show_list',
       'pages_manage_metadata',
       'pages_read_engagement',
+      'business_management',
       'instagram_manage_comments',
     ].join(',');
 
-    return `https://www.facebook.com/v21.0/dialog/oauth?client_id=${config.appId}&redirect_uri=${encodeURIComponent(redirectUri)}&scope=${scopes}&response_type=code&state=${tenantId}`;
+    const params = new URLSearchParams({
+      client_id: config.appId,
+      redirect_uri: redirectUri,
+      scope: scopes,
+      response_type: 'code',
+      state: tenantId,
+      auth_type: 'rerequest',
+    });
+
+    return `https://www.facebook.com/v21.0/dialog/oauth?${params.toString()}`;
   }
 
   async exchangeCodeForToken(tenantId: string, code: string, redirectUri: string): Promise<{
@@ -189,19 +201,43 @@ export class FacebookService {
   }
 
   async getUserPages(userAccessToken: string): Promise<any[]> {
+    // First, verify the user info
+    try {
+      const meUrl = `${this.graphApiUrl}/me?access_token=${userAccessToken}&fields=id,name`;
+      const meResponse = await fetch(meUrl);
+      const meData = await meResponse.json() as any;
+      this.logger.log(`[getUserPages] User info: ${JSON.stringify(meData)}`);
+    } catch (err) {
+      this.logger.warn(`[getUserPages] Could not fetch user info: ${err.message}`);
+    }
+
+    // Check token permissions
+    const debugUrl = `${this.graphApiUrl}/me/permissions?access_token=${userAccessToken}`;
+    try {
+      const debugResponse = await fetch(debugUrl);
+      const debugData = await debugResponse.json() as any;
+        this.logger.log(`[getUserPages] Token permissions checked: ${Array.isArray(debugData?.data) ? debugData.data.map((item: any) => `${item.permission}:${item.status}`).join(',') : 'unavailable'}`);
+    } catch (err) {
+      this.logger.warn(`[getUserPages] Could not fetch token permissions: ${err.message}`);
+    }
+
     const url = `${this.graphApiUrl}/me/accounts?access_token=${userAccessToken}&fields=id,name,access_token,picture,category,fan_count,instagram_business_account`;
 
-    this.logger.log(`[getUserPages] Fetching pages with token: ${userAccessToken?.substring(0, 15)}...`);
-    this.logger.log(`[getUserPages] Full URL: ${url.replace(userAccessToken, 'TOKEN_HIDDEN')}`);
+    this.logger.log('[getUserPages] Fetching pages from Facebook');
 
     const response = await fetch(url);
     const data = await response.json() as any;
 
-    this.logger.log(`[getUserPages] Raw Facebook response: ${JSON.stringify(data)}`);
+    this.logger.log(`[getUserPages] Facebook returned ${Array.isArray(data.data) ? data.data.length : 0} page(s)`);
 
     if (data.error) {
       this.logger.error(`[getUserPages] Facebook API error: ${JSON.stringify(data.error)}`);
       throw new BadRequestException(data.error.message || 'Failed to get pages');
+    }
+
+    if (!data.data || data.data.length === 0) {
+      this.logger.warn(`[getUserPages] No pages found for user. User may not be admin of any page or didn't select pages during OAuth.`);
+      this.logger.warn(`[getUserPages] IMPORTANT: Check if the user selected pages during OAuth flow, or if the app has 'pages_show_list' permission approved.`);
     }
 
     const pages = await Promise.all((data.data || []).map(async (page: any) => {
@@ -252,6 +288,42 @@ export class FacebookService {
       profilePicture: data.profile_picture_url,
       followersCount: data.followers_count,
     };
+  }
+
+  createPendingPageSelection(tenantId: string, pages: any[]): { selectionToken: string; pages: any[] } {
+    const selectionToken = randomUUID();
+    const expiresAt = Date.now() + 10 * 60 * 1000;
+
+    this.pendingPageSelections.set(selectionToken, { tenantId, expiresAt, pages });
+
+    return {
+      selectionToken,
+      pages: pages.map((page) => ({
+        id: page.id,
+        name: page.name,
+        picture: page.picture,
+        category: page.category,
+        fanCount: page.fanCount,
+        instagramAccount: page.instagramAccount,
+      })),
+    };
+  }
+
+  consumePendingPageSelection(tenantId: string, selectionToken: string, pageId: string): any {
+    const selection = this.pendingPageSelections.get(selectionToken);
+
+    if (!selection || selection.tenantId !== tenantId || selection.expiresAt < Date.now()) {
+      this.pendingPageSelections.delete(selectionToken);
+      throw new BadRequestException('Facebook page selection expired. Please reconnect Facebook.');
+    }
+
+    const page = selection.pages.find((item) => item.id === pageId);
+    if (!page?.accessToken) {
+      throw new BadRequestException('Selected Facebook page is not available. Please reconnect Facebook.');
+    }
+
+    this.pendingPageSelections.delete(selectionToken);
+    return page;
   }
 
   // ─── Connect / Disconnect ───

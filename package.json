@@ -43,7 +43,7 @@
     "ioredis": "^5.10.0",
     "mailparser": "^3.9.4",
     "mongoose": "^9.2.4",
-    "nodemailer": "^8.0.9",
+    "nodemailer": "^9.0.1",
     "passport": "^0.7.0",
     "passport-jwt": "^4.0.1",
     "redis": "^5.11.0",

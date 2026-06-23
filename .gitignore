@@ -49,3 +49,7 @@ uploads/
 *.swp
 *.swo
 *~
+
+# Documentation - ignore all .md except README
+*.md
+!README.md

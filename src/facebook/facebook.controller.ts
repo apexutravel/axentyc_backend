@@ -9,7 +9,6 @@ import {
   Res,
   HttpCode,
   Logger,
-  RawBodyRequest,
   Req,
 } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
@@ -18,7 +17,7 @@ import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { FacebookService } from './facebook.service';
 import { SaveFacebookConfigDto } from './dto/save-facebook-config.dto';
 import type { Response, Request } from 'express';
-import { createHmac } from 'crypto';
+import { createHmac, timingSafeEqual } from 'crypto';
 import { ConfigService } from '@nestjs/config';
 
 @ApiTags('facebook')
@@ -58,20 +57,26 @@ export class FacebookController {
     @Body() body: any,
     @Req() req: Request,
   ) {
-    // Log incoming webhook for debugging
-    this.logger.log(`📥 Webhook received: ${JSON.stringify(body, null, 2)}`);
+    this.logger.log(`Facebook webhook received: ${body?.object || 'unknown'} with ${Array.isArray(body?.entry) ? body.entry.length : 0} entr${Array.isArray(body?.entry) && body.entry.length === 1 ? 'y' : 'ies'}`);
 
     // Verify signature if app secret is configured
     const appSecret = this.configService.get<string>('FACEBOOK_APP_SECRET');
     const signature = req.headers['x-hub-signature-256'] as string;
 
-    if (appSecret && signature) {
+    if (appSecret) {
+      if (!signature) {
+        this.logger.warn('Missing webhook signature');
+        return { status: 'missing_signature' };
+      }
+
       const rawBody = JSON.stringify(body);
       const expectedSig = 'sha256=' + createHmac('sha256', appSecret)
         .update(rawBody)
         .digest('hex');
+      const received = Buffer.from(signature);
+      const expected = Buffer.from(expectedSig);
 
-      if (signature !== expectedSig) {
+      if (received.length !== expected.length || !timingSafeEqual(received, expected)) {
         this.logger.warn('Invalid webhook signature');
         return { status: 'invalid_signature' };
       }
@@ -129,53 +134,6 @@ export class FacebookController {
     };
   }
 
-  @Get('integrations/facebook/debug-config')
-  @ApiBearerAuth()
-  @ApiOperation({ summary: '[DEBUG] Check stored Facebook config (remove in production)' })
-  async debugFacebookConfig(@CurrentUser() user: any) {
-    const config = await this.facebookService.getFacebookConfig(user.tenantId);
-    if (!config) {
-      return { exists: false };
-    }
-    const secret = config.appSecret || '';
-    return {
-      exists: true,
-      appId: config.appId,
-      secretLength: secret.length,
-      secretFull: secret,
-      secretHasBullets: secret.includes('•'),
-      verifyToken: config.verifyToken,
-      isActive: config.isActive,
-    };
-  }
-
-  @Get('integrations/facebook/test-pages')
-  @ApiBearerAuth()
-  @ApiOperation({ summary: '[DEBUG] Test fetching pages with a user token' })
-  async testFetchPages(@CurrentUser() user: any, @Query('token') userToken: string) {
-    if (!userToken) {
-      return { error: 'Provide ?token=YOUR_USER_ACCESS_TOKEN' };
-    }
-
-    try {
-      const pages = await this.facebookService.getUserPages(userToken);
-      return {
-        success: true,
-        pagesCount: pages.length,
-        pages,
-        message: pages.length === 0 
-          ? 'Facebook returned 0 pages. The user may not be admin of any page, or pages were not selected during OAuth.'
-          : `Found ${pages.length} page(s)`,
-      };
-    } catch (e: any) {
-      return {
-        success: false,
-        error: e.message,
-        details: e.response?.data || e,
-      };
-    }
-  }
-
   @Delete('integrations/facebook/config')
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Delete Facebook App configuration' })
@@ -220,10 +178,12 @@ export class FacebookController {
     // Get pages
     const pages = await this.facebookService.getUserPages(longLived.accessToken);
 
+    const selection = this.facebookService.createPendingPageSelection(user.tenantId, pages);
+
     return {
-      userAccessToken: longLived.accessToken,
       expiresIn: longLived.expiresIn,
-      pages,
+      selectionToken: selection.selectionToken,
+      pages: selection.pages,
     };
   }
 
@@ -234,18 +194,26 @@ export class FacebookController {
     @CurrentUser() user: any,
     @Body() body: {
       pageId: string;
-      pageName: string;
-      pageAccessToken: string;
-      picture?: string;
-      category?: string;
+      selectionToken: string;
     },
   ) {
+    const page = this.facebookService.consumePendingPageSelection(
+      user.tenantId,
+      body.selectionToken,
+      body.pageId,
+    );
+
     const account = await this.facebookService.connectPage(
       user.tenantId,
-      body.pageId,
-      body.pageName,
-      body.pageAccessToken,
-      { picture: body.picture, category: body.category },
+      page.id,
+      page.name,
+      page.accessToken,
+      {
+        picture: page.picture,
+        category: page.category,
+        fanCount: page.fanCount,
+        instagramAccount: page.instagramAccount,
+      },
     );
 
     return { success: true, account };
