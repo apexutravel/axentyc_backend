@@ -624,18 +624,29 @@ export class FacebookService {
     if (!senderId || !message) return;
 
     this.logger.log(`Incoming ${platform} message from ${senderId} to account ${accountId}`);
+    this.logger.debug(`Event details - senderId: ${senderId}, recipientId: ${recipientId}, accountId: ${accountId}`);
 
     // Find the social account (Facebook page or Instagram account)
+    const lookupId = recipientId || accountId;
+    this.logger.debug(`Looking for ${platform} account with pageId/accountId: ${lookupId}`);
+    
     const account = await this.socialAccountModel.findOne({
       $or: [
-        { pageId: recipientId || accountId, platform: platform === 'facebook' ? SocialPlatform.FACEBOOK : SocialPlatform.INSTAGRAM },
-        { accountId: recipientId || accountId, platform: platform === 'facebook' ? SocialPlatform.FACEBOOK : SocialPlatform.INSTAGRAM },
+        { pageId: lookupId, platform: platform === 'facebook' ? SocialPlatform.FACEBOOK : SocialPlatform.INSTAGRAM },
+        { accountId: lookupId, platform: platform === 'facebook' ? SocialPlatform.FACEBOOK : SocialPlatform.INSTAGRAM },
       ],
       status: SocialAccountStatus.CONNECTED,
     });
 
     if (!account) {
-      this.logger.warn(`No connected ${platform} account found for ${accountId}`);
+      this.logger.warn(`No connected ${platform} account found for lookupId: ${lookupId} (recipientId: ${recipientId}, accountId: ${accountId})`);
+      
+      // Debug: List all connected accounts for this platform
+      const allAccounts = await this.socialAccountModel.find({
+        platform: platform === 'facebook' ? SocialPlatform.FACEBOOK : SocialPlatform.INSTAGRAM,
+        status: SocialAccountStatus.CONNECTED,
+      }).select('pageId accountId accountName tenantId');
+      this.logger.debug(`Connected ${platform} accounts in DB: ${JSON.stringify(allAccounts.map(a => ({ pageId: a.pageId, accountId: a.accountId, name: a.accountName })))}`);
       return;
     }
 

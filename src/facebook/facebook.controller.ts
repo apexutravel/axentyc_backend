@@ -58,6 +58,7 @@ export class FacebookController {
     @Req() req: Request,
   ) {
     this.logger.log(`Facebook webhook received: ${body?.object || 'unknown'} with ${Array.isArray(body?.entry) ? body.entry.length : 0} entr${Array.isArray(body?.entry) && body.entry.length === 1 ? 'y' : 'ies'}`);
+    this.logger.debug(`Full webhook payload: ${JSON.stringify(body)}`);
 
     // Verify signature if app secret is configured
     const appSecret = this.configService.get<string>('FACEBOOK_APP_SECRET');
