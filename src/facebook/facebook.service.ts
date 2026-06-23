@@ -573,8 +573,12 @@ export class FacebookService {
       }
 
       // Handle feed events (Comments on posts)
+      if (entry.changes && entry.changes.length > 0) {
+        this.logger.log(`[Feed] Received ${entry.changes.length} change(s) for page ${pageId}`);
+      }
       for (const change of entry.changes || []) {
         try {
+          this.logger.debug(`[Feed] Change field: ${change.field}, value: ${JSON.stringify(change.value)}`);
           if (change.field === 'feed' && change.value) {
             await this.handleFeedComment(pageId, change.value);
           }
@@ -754,11 +758,14 @@ export class FacebookService {
 
   private async handleFeedComment(pageId: string, feedData: any): Promise<void> {
     // Handle comments on Facebook posts
+    this.logger.log(`[Feed] Processing feed data: ${JSON.stringify(feedData)}`);
     const { item, verb, post_id, comment_id, message, from, created_time } = feedData;
+
+    this.logger.log(`[Feed] item=${item}, verb=${verb}, post_id=${post_id}, comment_id=${comment_id}`);
 
     // Only process new comments (verb: 'add') and comment items
     if (verb !== 'add' || (item !== 'comment' && item !== 'status')) {
-      this.logger.debug(`Skipping feed event: ${verb} ${item}`);
+      this.logger.debug(`[Feed] Skipping feed event: ${verb} ${item}`);
       return;
     }
 
