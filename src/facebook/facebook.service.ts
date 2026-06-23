@@ -1105,7 +1105,14 @@ export class FacebookService {
       status: ConversationStatus.OPEN,
       metadata,
     });
-    return newConversation.save();
+    const savedConversation = await newConversation.save();
+    
+    // Populate contactId and emit event to notify frontend
+    const populatedConversation = await savedConversation.populate('contactId');
+    this.eventsGateway.emitToTenant(tenantId, 'conversation.created', populatedConversation);
+    this.logger.log(`New ${platform} conversation created: ${savedConversation._id}`);
+    
+    return savedConversation;
   }
 
   private async getOrCreateCommentConversation(
@@ -1140,7 +1147,10 @@ export class FacebookService {
       },
     });
     const saved = await newConversation.save();
-    return saved.populate('contactId');
+    const populated = await saved.populate('contactId');
+    this.eventsGateway.emitToTenant(tenantId, 'conversation.created', populated);
+    this.logger.log(`New Facebook comment conversation created: ${saved._id}`);
+    return populated;
   }
 
   private async getOrCreateInstagramCommentConversation(
@@ -1175,6 +1185,9 @@ export class FacebookService {
       },
     });
     const saved = await newConversation.save();
-    return saved.populate('contactId');
+    const populated = await saved.populate('contactId');
+    this.eventsGateway.emitToTenant(tenantId, 'conversation.created', populated);
+    this.logger.log(`New Instagram comment conversation created: ${saved._id}`);
+    return populated;
   }
 }
