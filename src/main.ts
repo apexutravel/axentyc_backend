@@ -18,7 +18,7 @@ async function bootstrap() {
   app.use(
     express.json({
       verify: (req: any, _res, buf) => {
-        if (req.originalUrl && req.originalUrl.includes('/api/v1/webhook/facebook')) {
+        if (req.originalUrl && req.originalUrl.includes('/webhook/facebook')) {
           req.rawBody = buf;
         }
       },
@@ -28,7 +28,7 @@ async function bootstrap() {
     express.urlencoded({
       extended: true,
       verify: (req: any, _res, buf) => {
-        if (req.originalUrl && req.originalUrl.includes('/api/v1/webhook/facebook')) {
+        if (req.originalUrl && req.originalUrl.includes('/webhook/facebook')) {
           req.rawBody = buf;
         }
       },
