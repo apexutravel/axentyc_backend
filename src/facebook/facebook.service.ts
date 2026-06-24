@@ -711,12 +711,14 @@ export class FacebookService {
 
   async handleWebhook(body: any): Promise<void> {
     // Handle both Facebook Page and Instagram webhooks
+    this.logger.log(`[Webhook] Processing ${body.object} webhook with ${body.entry?.length || 0} entries`);
+    
     if (body.object === 'page') {
       await this.handlePageWebhook(body);
     } else if (body.object === 'instagram') {
       await this.handleInstagramWebhook(body);
     } else {
-      this.logger.warn(`Received unknown webhook object type: ${body.object}`);
+      this.logger.warn(`[Webhook] Unknown object type: ${body.object}`);
     }
   }
 
