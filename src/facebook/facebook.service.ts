@@ -55,8 +55,180 @@ export class FacebookService {
       this.logger.warn('Facebook app credentials not configured in environment variables');
       return null;
     }
-
     return { appId, appSecret, verifyToken };
+  }
+
+  // ─── Manual Sync (Fallback when webhooks are not delivering) ───
+
+  async syncCommentsForTenant(tenantId: string, pageId?: string): Promise<{ success: boolean; results: any[] }> {
+    const pageFilter: any = {
+      tenantId: new Types.ObjectId(tenantId),
+      platform: SocialPlatform.FACEBOOK,
+      status: SocialAccountStatus.CONNECTED,
+    };
+    if (pageId) pageFilter.pageId = pageId;
+
+    const accounts = await this.socialAccountModel.find(pageFilter);
+    const results: any[] = [];
+
+    for (const account of accounts) {
+      if (!account.pageId || !account.accessToken) {
+        results.push({ pageId: account.pageId, status: 'skipped', reason: 'missing_token_or_page' });
+        continue;
+      }
+
+      try {
+        const fields = [
+          'id',
+          'permalink_url',
+          'created_time',
+          'from',
+          'message',
+          'full_picture',
+          'comments.limit(100){id,from,message,created_time,parent{id}}',
+        ].join(',');
+        const url = `${this.graphApiUrl}/${account.pageId}/feed?fields=${encodeURIComponent(fields)}&limit=10&access_token=${account.accessToken}`;
+        this.logger.log(`[Sync] Fetching posts for page ${account.pageId}`);
+        const resp = await fetch(url);
+        const data = (await resp.json()) as any;
+        const posts: any[] = Array.isArray(data?.data) ? data.data : [];
+
+        let created = 0;
+        for (const post of posts) {
+          const postId: string = post.id; // format: {pageId}_{postNumericId}
+          const comments: any[] = post.comments?.data || [];
+          for (const c of comments) {
+            const saved = await this.upsertFbCommentFromFetch(
+              account.tenantId.toString(),
+              account,
+              postId,
+              c,
+            );
+            if (saved) created += 1;
+          }
+        }
+
+        results.push({ pageId: account.pageId, status: 'ok', posts: posts.length, commentsAdded: created });
+      } catch (e: any) {
+        this.logger.error(`[Sync] Error syncing page ${account.pageId}: ${e?.message || e}`);
+        results.push({ pageId: account.pageId, status: 'error', error: e?.message || String(e) });
+      }
+    }
+
+    return { success: true, results };
+  }
+
+  private async upsertFbCommentFromFetch(
+    tenantId: string,
+    account: SocialAccountDocument,
+    postId: string,
+    c: any,
+  ): Promise<boolean> {
+    const commenterId: string | undefined = c?.from?.id;
+    const commenterName: string | undefined = c?.from?.name;
+    const commentText: string = typeof c?.message === 'string' ? c.message : '';
+    const commentId: string | undefined = c?.id;
+    const createdTimeIso: string | undefined = c?.created_time;
+
+    if (!commentId || !commenterId) return false;
+
+    const exists = await this.messageModel.findOne({
+      tenantId: new Types.ObjectId(tenantId),
+      'metadata.commentId': commentId,
+    });
+    if (exists) return false;
+
+    // Ensure contact exists
+    const contact = await this.getOrCreateContact(
+      tenantId,
+      commenterId,
+      account.accessToken,
+      'facebook',
+    );
+
+    // Ensure conversation for this post
+    const conversation = await this.getOrCreateCommentConversation(
+      tenantId,
+      contact._id.toString(),
+      commenterId,
+      postId,
+      account.pageId!,
+      account.accountName,
+    );
+
+    // Save message
+    const newMessage = new this.messageModel({
+      tenantId: new Types.ObjectId(tenantId),
+      conversationId: conversation._id,
+      direction: MessageDirection.INBOUND,
+      type: MessageType.TEXT,
+      content: commentText || '(comentario sin texto)',
+      senderName: contact.name || commenterName,
+      status: MessageStatus.SENT,
+      metadata: {
+        commentId: commentId,
+        postId: postId,
+        platform: 'facebook',
+        isComment: true,
+        commentCreatedAt: createdTimeIso,
+      },
+    });
+
+    const savedMessage = await newMessage.save();
+
+    // Update conversation
+    const isBeingViewed = this.eventsGateway.isConversationBeingViewed(conversation._id.toString());
+    await this.conversationModel.findByIdAndUpdate(conversation._id, {
+      lastMessage: newMessage.content,
+      lastMessageAt: new Date(),
+      status: ConversationStatus.OPEN,
+      $inc: { unreadCount: isBeingViewed ? 0 : 1 },
+    });
+
+    // Emit events
+    this.eventsGateway.emitMessageReceived(
+      tenantId,
+      conversation._id.toString(),
+      savedMessage,
+      contact,
+    );
+    this.eventsGateway.emitToConversation(
+      conversation._id.toString(),
+      'message.new',
+      savedMessage,
+    );
+
+    return true;
+  }
+
+  async getPageFeed(tenantId: string, pageId: string, limit = 10): Promise<{ pageId: string; posts: any[] }> {
+    const account = await this.socialAccountModel.findOne({
+      tenantId: new Types.ObjectId(tenantId),
+      platform: SocialPlatform.FACEBOOK,
+      pageId,
+      status: SocialAccountStatus.CONNECTED,
+    });
+
+    if (!account?.accessToken) {
+      throw new BadRequestException('Facebook page not connected or missing access token');
+    }
+
+    const fields = [
+      'id',
+      'permalink_url',
+      'created_time',
+      'from',
+      'message',
+      'full_picture',
+      'comments.limit(50){id,from,message,created_time,parent{id}}',
+    ].join(',');
+    const url = `${this.graphApiUrl}/${pageId}/feed?fields=${encodeURIComponent(fields)}&limit=${limit}&access_token=${account.accessToken}`;
+    const resp = await fetch(url);
+    const data = await resp.json() as any;
+    if (data.error) {
+      throw new BadRequestException(data.error?.message || 'Failed to fetch page feed');
+    }
+    return { pageId, posts: Array.isArray(data?.data) ? data.data : [] };
   }
 
   // Get tenant-specific Facebook config from database (DEPRECATED - kept for migration)

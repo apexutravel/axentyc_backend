@@ -285,4 +285,29 @@ export class FacebookController {
     const result = await this.facebookService.resubscribeAllPages(user.tenantId);
     return result;
   }
+
+  @Post('integrations/facebook/sync-comments')
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Manually sync recent Facebook comments from Graph API (fallback when webhooks fail)' })
+  async syncComments(
+    @CurrentUser() user: any,
+    @Body() body: { pageId?: string },
+  ) {
+    return this.facebookService.syncCommentsForTenant(user.tenantId, body?.pageId);
+  }
+
+  @Get('integrations/facebook/feed')
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Get recent Facebook page posts with comments (for UI listing)' })
+  async getFeed(
+    @CurrentUser() user: any,
+    @Query('pageId') pageId: string,
+    @Query('limit') limit?: string,
+  ) {
+    if (!pageId) {
+      return { success: false, message: 'pageId is required' };
+    }
+    const lim = limit ? parseInt(limit) : 10;
+    return this.facebookService.getPageFeed(user.tenantId, pageId, lim);
+  }
 }
