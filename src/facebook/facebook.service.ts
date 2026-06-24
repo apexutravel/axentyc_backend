@@ -125,11 +125,10 @@ export class FacebookService {
 
     const scopes = [
       'pages_messaging',
-      'pages_show_list',
       'pages_manage_metadata',
       'pages_read_engagement',
-      'business_management',
-      'instagram_manage_comments',
+      'pages_manage_engagement',
+      'pages_show_list',
     ].join(',');
 
     const params = new URLSearchParams({
@@ -776,12 +775,44 @@ export class FacebookService {
       return;
     }
 
-    const commenterId = from?.id;
-    const commenterName = from?.name;
-    const commentText = message || '';
+    let commenterId = from?.id as string | undefined;
+    let commenterName = from?.name as string | undefined;
+    let commentText = typeof message === 'string' ? message : '';
 
-    if (!commenterId || !commentText) {
-      this.logger.warn('Missing commenter ID or comment text');
+    // Fallback: fetch comment details if message or from is missing
+    if ((!commenterId || !commentText) && comment_id) {
+      try {
+        // Find the social account for this page (needed for access token)
+        const accountForFetch = await this.socialAccountModel.findOne({
+          pageId,
+          platform: SocialPlatform.FACEBOOK,
+          status: SocialAccountStatus.CONNECTED,
+        });
+        if (accountForFetch?.accessToken) {
+          const fields = 'from{id,name},message,created_time,permalink_url';
+          const url = `${this.graphApiUrl}/${comment_id}?fields=${fields}&access_token=${accountForFetch.accessToken}`;
+          this.logger.debug(`[Feed] Fetching comment details from Graph API: ${url}`);
+          const resp = await fetch(url);
+          if (resp.ok) {
+            const details = await resp.json();
+            this.logger.debug(`[Feed] Comment details: ${JSON.stringify(details)}`);
+            commenterId = commenterId || details?.from?.id;
+            commenterName = commenterName || details?.from?.name;
+            commentText = commentText || details?.message || '';
+          } else {
+            const errText = await resp.text();
+            this.logger.warn(`[Feed] Failed to fetch comment details (${resp.status}): ${errText}`);
+          }
+        } else {
+          this.logger.warn('[Feed] Cannot fetch comment details: missing page access token');
+        }
+      } catch (e) {
+        this.logger.error('[Feed] Error fetching comment details', e as any);
+      }
+    }
+
+    if (!commenterId) {
+      this.logger.warn('[Feed] Missing commenter ID after fallback; payload=' + JSON.stringify(feedData));
       return;
     }
 
@@ -814,13 +845,13 @@ export class FacebookService {
       account.accountName,
     );
 
-    // Save the comment as a message
+    // Save the comment as a message (allow empty text; store metadata)
     const newMessage = new this.messageModel({
       conversationId: conversation._id,
       senderId: contact._id,
       senderType: 'contact',
       type: 'text',
-      content: commentText,
+      content: commentText || '(comentario sin texto)',
       status: 'delivered',
       metadata: {
         commentId: comment_id,
@@ -835,7 +866,7 @@ export class FacebookService {
 
     // Update conversation
     await this.conversationModel.findByIdAndUpdate(conversation._id, {
-      lastMessage: commentText,
+      lastMessage: commentText || '(comentario sin texto)',
       lastMessageAt: new Date(),
       status: ConversationStatus.OPEN,
       $inc: { unreadCount: 1 },

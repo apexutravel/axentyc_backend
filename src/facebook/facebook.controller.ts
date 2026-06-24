@@ -62,24 +62,41 @@ export class FacebookController {
 
     // Verify signature if app secret is configured
     const appSecret = this.configService.get<string>('FACEBOOK_APP_SECRET');
-    const signature = req.headers['x-hub-signature-256'] as string;
+    const signature256 = req.headers['x-hub-signature-256'] as string;
+    const signatureSha1 = req.headers['x-hub-signature'] as string;
+    const env = this.configService.get<string>('NODE_ENV') || process.env.NODE_ENV || 'development';
 
     if (appSecret) {
-      if (!signature) {
-        this.logger.warn('Missing webhook signature');
-        return { status: 'missing_signature' };
-      }
-
-      const rawBody = JSON.stringify(body);
-      const expectedSig = 'sha256=' + createHmac('sha256', appSecret)
-        .update(rawBody)
-        .digest('hex');
-      const received = Buffer.from(signature);
-      const expected = Buffer.from(expectedSig);
-
-      if (received.length !== expected.length || !timingSafeEqual(received, expected)) {
-        this.logger.warn('Invalid webhook signature');
-        return { status: 'invalid_signature' };
+      if (!signature256 && !signatureSha1) {
+        this.logger.warn('Missing webhook signature headers (x-hub-signature-256 / x-hub-signature)');
+        if (env === 'production') {
+          return { status: 'missing_signature' };
+        }
+      } else {
+        const rawBody = JSON.stringify(body);
+        if (signature256) {
+          this.logger.debug('Validating webhook with x-hub-signature-256 header');
+          const expectedSig256 = 'sha256=' + createHmac('sha256', appSecret)
+            .update(rawBody)
+            .digest('hex');
+          const received = Buffer.from(signature256);
+          const expected = Buffer.from(expectedSig256);
+          if (received.length !== expected.length || !timingSafeEqual(received, expected)) {
+            this.logger.warn('Invalid webhook signature (sha256)');
+            return { status: 'invalid_signature' };
+          }
+        } else if (signatureSha1) {
+          this.logger.debug('Validating webhook with x-hub-signature (sha1) header');
+          const expectedSigSha1 = 'sha1=' + createHmac('sha1', appSecret)
+            .update(rawBody)
+            .digest('hex');
+          const received = Buffer.from(signatureSha1);
+          const expected = Buffer.from(expectedSigSha1);
+          if (received.length !== expected.length || !timingSafeEqual(received, expected)) {
+            this.logger.warn('Invalid webhook signature (sha1)');
+            return { status: 'invalid_signature' };
+          }
+        }
       }
     }
 
