@@ -847,29 +847,31 @@ export class FacebookService {
 
     // Save the comment as a message (allow empty text; store metadata)
     const newMessage = new this.messageModel({
+      tenantId: new Types.ObjectId(tenantId),
       conversationId: conversation._id,
-      senderId: contact._id,
-      senderType: 'contact',
-      type: 'text',
+      direction: MessageDirection.INBOUND,
+      type: MessageType.TEXT,
       content: commentText || '(comentario sin texto)',
-      status: 'delivered',
+      senderName: contact.name,
+      status: MessageStatus.SENT,
       metadata: {
         commentId: comment_id,
         postId: post_id,
         platform: 'facebook',
         isComment: true,
+        commentCreatedAt: created_time ? new Date(created_time * 1000).toISOString() : undefined,
       },
-      createdAt: created_time ? new Date(created_time * 1000) : new Date(),
     });
 
     const savedMessage = await newMessage.save();
 
     // Update conversation
+    const isBeingViewedFb = this.eventsGateway.isConversationBeingViewed(conversation._id.toString());
     await this.conversationModel.findByIdAndUpdate(conversation._id, {
       lastMessage: commentText || '(comentario sin texto)',
       lastMessageAt: new Date(),
       status: ConversationStatus.OPEN,
-      $inc: { unreadCount: 1 },
+      $inc: { unreadCount: isBeingViewedFb ? 0 : 1 },
     });
 
     // Emit real-time events
@@ -933,12 +935,13 @@ export class FacebookService {
 
     // Save the comment as a message
     const newMessage = new this.messageModel({
+      tenantId: new Types.ObjectId(tenantId),
       conversationId: conversation._id,
-      senderId: contact._id,
-      senderType: 'contact',
-      type: 'text',
+      direction: MessageDirection.INBOUND,
+      type: MessageType.TEXT,
       content: text,
-      status: 'delivered',
+      senderName: contact.name,
+      status: MessageStatus.SENT,
       metadata: {
         commentId,
         mediaId,
@@ -950,11 +953,12 @@ export class FacebookService {
     const savedMessage = await newMessage.save();
 
     // Update conversation
+    const isBeingViewedIg = this.eventsGateway.isConversationBeingViewed(conversation._id.toString());
     await this.conversationModel.findByIdAndUpdate(conversation._id, {
       lastMessage: text,
       lastMessageAt: new Date(),
       status: ConversationStatus.OPEN,
-      $inc: { unreadCount: 1 },
+      $inc: { unreadCount: isBeingViewedIg ? 0 : 1 },
     });
 
     // Emit real-time events
