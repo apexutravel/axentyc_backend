@@ -666,6 +666,7 @@ export class FacebookService {
       senderId,
       accountId,
       platform,
+      account.accountName,
     );
 
     // Determine message type and content
@@ -810,6 +811,7 @@ export class FacebookService {
       commenterId,
       post_id,
       pageId,
+      account.accountName,
     );
 
     // Save the comment as a message
@@ -895,6 +897,7 @@ export class FacebookService {
       commenterId,
       mediaId || commentId,
       igAccountId,
+      account.accountName,
     );
 
     // Save the comment as a message
@@ -1076,6 +1079,7 @@ export class FacebookService {
     senderId: string,
     accountId: string,
     platform: 'facebook' | 'instagram' = 'facebook',
+    accountName: string = '',
   ): Promise<any> {
     const channel = platform === 'instagram' ? ConversationChannel.INSTAGRAM : ConversationChannel.FACEBOOK;
     
@@ -1096,6 +1100,7 @@ export class FacebookService {
     const subject = platform === 'instagram' ? 'Instagram DM' : 'Facebook Messenger';
     const metadata: any = {
       externalId: senderId,
+      pageName: accountName,  // Add page/account name for display
     };
     
     if (platform === 'instagram') {
@@ -1128,6 +1133,7 @@ export class FacebookService {
     commenterId: string,
     postId: string,
     pageId: string,
+    pageName: string,
   ): Promise<any> {
     // Try to find existing conversation for this post
     const existing = await this.conversationModel.findOne({
@@ -1149,6 +1155,7 @@ export class FacebookService {
       metadata: {
         postId,
         pageId,
+        pageName,
         isComment: true,
         externalId: commenterId,
       },
@@ -1166,6 +1173,7 @@ export class FacebookService {
     commenterId: string,
     mediaId: string,
     igAccountId: string,
+    accountName: string,
   ): Promise<any> {
     // Try to find existing conversation for this Instagram post
     const existing = await this.conversationModel.findOne({
@@ -1187,6 +1195,7 @@ export class FacebookService {
       metadata: {
         mediaId,
         accountId: igAccountId,
+        pageName: accountName,
         isComment: true,
         externalId: commenterId,
       },
