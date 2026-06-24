@@ -73,7 +73,9 @@ export class FacebookController {
           return { status: 'missing_signature' };
         }
       } else {
-        const rawBody = JSON.stringify(body);
+        // Use the raw request body captured by express middleware for HMAC validation
+        const rawBodyBuf: any = (req as any).rawBody;
+        const rawBody = rawBodyBuf ? rawBodyBuf : Buffer.from(JSON.stringify(body));
         if (signature256) {
           this.logger.debug('Validating webhook with x-hub-signature-256 header');
           const expectedSig256 = 'sha256=' + createHmac('sha256', appSecret)

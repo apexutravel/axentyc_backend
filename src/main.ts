@@ -3,6 +3,7 @@ import { ValidationPipe } from '@nestjs/common';
 import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger';
 import { ConfigService } from '@nestjs/config';
 import cookieParser from 'cookie-parser';
+import express from 'express';
 import { NestExpressApplication } from '@nestjs/platform-express';
 import { join } from 'path';
 import { AppModule } from './app.module';
@@ -12,6 +13,27 @@ async function bootstrap() {
   const configService = app.get(ConfigService);
 
   app.use(cookieParser());
+
+  // Preserve raw request body for Facebook webhook signature verification
+  app.use(
+    express.json({
+      verify: (req: any, _res, buf) => {
+        if (req.originalUrl && req.originalUrl.includes('/api/v1/webhook/facebook')) {
+          req.rawBody = buf;
+        }
+      },
+    }),
+  );
+  app.use(
+    express.urlencoded({
+      extended: true,
+      verify: (req: any, _res, buf) => {
+        if (req.originalUrl && req.originalUrl.includes('/api/v1/webhook/facebook')) {
+          req.rawBody = buf;
+        }
+      },
+    }),
+  );
 
   app.useStaticAssets(join(__dirname, '..', 'public'));
   app.useStaticAssets(join(__dirname, '..', 'uploads'), {
