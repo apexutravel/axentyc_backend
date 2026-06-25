@@ -4,6 +4,7 @@ import {
   BadRequestException,
   NotFoundException,
 } from '@nestjs/common';
+import { Cron, CronExpression } from '@nestjs/schedule';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 import { ConfigService } from '@nestjs/config';
@@ -29,6 +30,7 @@ import { randomUUID } from 'crypto';
 export class FacebookService {
   private readonly logger = new Logger(FacebookService.name);
   private readonly pendingPageSelections = new Map<string, { tenantId: string; expiresAt: number; pages: any[] }>();
+  private readonly recentWebhooks = new Map<string, number>(); // pageId -> timestamp
 
   constructor(
     @InjectModel(SocialAccount.name)
@@ -56,6 +58,73 @@ export class FacebookService {
       return null;
     }
     return { appId, appSecret, verifyToken };
+  }
+
+  // ─── Automatic Polling (Hybrid: Webhook + Polling Fallback) ───
+
+  @Cron('*/3 * * * *') // Every 3 minutes
+  async autoSyncComments() {
+    const enabled = this.configService.get<string>('FACEBOOK_COMMENTS_POLLING_ENABLED') === 'true';
+    if (!enabled) {
+      return;
+    }
+
+    this.logger.log('[Auto-Sync] Starting automatic comment sync for all tenants');
+
+    try {
+      const accounts = await this.socialAccountModel.find({
+        platform: SocialPlatform.FACEBOOK,
+        status: SocialAccountStatus.CONNECTED,
+      });
+
+      const tenantMap = new Map<string, SocialAccountDocument[]>();
+      for (const account of accounts) {
+        const tenantId = account.tenantId.toString();
+        if (!tenantMap.has(tenantId)) {
+          tenantMap.set(tenantId, []);
+        }
+        tenantMap.get(tenantId)!.push(account);
+      }
+
+      let totalSynced = 0;
+      for (const [tenantId, tenantAccounts] of tenantMap) {
+        for (const account of tenantAccounts) {
+          // Skip if webhook received in last 5 minutes
+          const lastWebhook = this.recentWebhooks.get(account.pageId!);
+          if (lastWebhook && Date.now() - lastWebhook < 5 * 60 * 1000) {
+            this.logger.debug(`[Auto-Sync] Skipping ${account.accountName} - recent webhook received`);
+            continue;
+          }
+
+          try {
+            const result = await this.syncCommentsForTenant(tenantId, account.pageId!);
+            const added = result.results[0]?.commentsAdded || 0;
+            if (added > 0) {
+              this.logger.log(`[Auto-Sync] Synced ${added} new comments for ${account.accountName}`);
+              totalSynced += added;
+            }
+          } catch (e: any) {
+            this.logger.error(`[Auto-Sync] Error syncing ${account.accountName}: ${e.message}`);
+          }
+        }
+      }
+
+      if (totalSynced > 0) {
+        this.logger.log(`[Auto-Sync] Completed: ${totalSynced} new comments synced`);
+      }
+    } catch (e: any) {
+      this.logger.error(`[Auto-Sync] Fatal error: ${e.message}`);
+    }
+  }
+
+  private markWebhookReceived(pageId: string) {
+    this.recentWebhooks.set(pageId, Date.now());
+    // Clean old entries (older than 10 minutes)
+    for (const [pid, timestamp] of this.recentWebhooks.entries()) {
+      if (Date.now() - timestamp > 10 * 60 * 1000) {
+        this.recentWebhooks.delete(pid);
+      }
+    }
   }
 
   // ─── Manual Sync (Fallback when webhooks are not delivering) ───
@@ -991,6 +1060,9 @@ export class FacebookService {
     }
 
     this.logger.log(`New comment on post ${post_id} from ${commenterName} (${commenterId})`);
+
+    // Mark webhook as received for this page
+    this.markWebhookReceived(pageId);
 
     // Find the social account for this page
     const account = await this.socialAccountModel.findOne({
