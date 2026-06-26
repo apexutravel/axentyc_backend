@@ -551,13 +551,21 @@ export class FacebookService {
       if (!profileId || profile?.picture?.data?.url) return;
       if (!profileCache.has(profileId)) {
         try {
-          const fields = 'picture.type(normal).width(80).height(80),profile_pic';
+          const fields = 'picture.type(large),profile_pic';
           const url = `${this.graphApiUrl}/${profileId}?fields=${encodeURIComponent(fields)}&access_token=${pageAccessToken}`;
           const resp = await fetch(url);
           const data = await resp.json() as any;
-          profileCache.set(profileId, data?.picture?.data?.url || data?.profile_pic || null);
+          const picUrl = data?.picture?.data?.url || data?.profile_pic || null;
+          if (!picUrl) {
+            // Fallback: try simple picture field
+            const fallbackUrl = `${this.graphApiUrl}/${profileId}/picture?type=normal&access_token=${pageAccessToken}`;
+            profileCache.set(profileId, fallbackUrl);
+          } else {
+            profileCache.set(profileId, picUrl);
+          }
         } catch {
-          profileCache.set(profileId, null);
+          // Last resort: use the redirect endpoint directly
+          profileCache.set(profileId, `${this.graphApiUrl}/${profileId}/picture?type=normal&access_token=${pageAccessToken}`);
         }
       }
       const url = profileCache.get(profileId);
@@ -1557,6 +1565,82 @@ export class FacebookService {
 
     this.logger.log(`FB message sent to ${externalId}, mid: ${result.message_id}`);
     return true;
+  }
+
+  async sendDirectMessage(
+    tenantId: string,
+    pageId: string,
+    recipientPsid: string,
+    content: string,
+  ): Promise<{ success: boolean; messageId?: string }> {
+    const account = await this.socialAccountModel.findOne({
+      tenantId: new Types.ObjectId(tenantId),
+      pageId,
+      platform: SocialPlatform.FACEBOOK,
+      status: SocialAccountStatus.CONNECTED,
+    });
+    if (!account?.accessToken) {
+      throw new BadRequestException('Facebook page not connected or missing access token');
+    }
+
+    const messagePayload: any = {
+      recipient: { id: recipientPsid },
+      messaging_type: 'RESPONSE',
+      message: { text: content },
+    };
+
+    const url = `${this.graphApiUrl}/me/messages?access_token=${account.accessToken}`;
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(messagePayload),
+    });
+
+    const result = await response.json() as any;
+    if (result.error) {
+      this.logger.error('Failed to send direct FB message:', result.error);
+      throw new BadRequestException(result.error.message || 'Failed to send direct message');
+    }
+
+    this.logger.log(`Direct FB message sent to ${recipientPsid}, mid: ${result.message_id}`);
+
+    // Also create or find contact and conversation for this recipient
+    const contact = await this.getOrCreateContact(tenantId, recipientPsid, account.accessToken, 'facebook');
+    const conversation = await this.getOrCreateConversation(
+      tenantId,
+      contact._id.toString(),
+      recipientPsid,
+      pageId,
+      'facebook',
+      account.accountName,
+    );
+
+    // Save the outbound message
+    const newMessage = new this.messageModel({
+      tenantId: new Types.ObjectId(tenantId),
+      conversationId: conversation._id,
+      direction: MessageDirection.OUTBOUND,
+      type: MessageType.TEXT,
+      content,
+      senderName: account.accountName,
+      status: MessageStatus.SENT,
+      metadata: {
+        platform: 'facebook',
+        pageId,
+        externalId: recipientPsid,
+      },
+    });
+    await newMessage.save();
+
+    await this.conversationModel.findByIdAndUpdate(conversation._id, {
+      lastMessage: content,
+      lastMessageAt: new Date(),
+    });
+
+    this.eventsGateway.emitToConversation(conversation._id.toString(), 'message.new', newMessage);
+    this.eventsGateway.emitToTenant(tenantId, 'conversation.updated', conversation);
+
+    return { success: true, messageId: result.message_id };
   }
 
   // ─── Helpers ───

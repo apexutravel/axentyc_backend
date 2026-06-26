@@ -343,6 +343,24 @@ export class FacebookController {
     );
   }
 
+  @Post('integrations/facebook/send-direct-message')
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Send a direct Facebook Messenger message to a user' })
+  async sendDirectMessage(
+    @CurrentUser() user: any,
+    @Body() body: { pageId: string; recipientPsid: string; message: string },
+  ) {
+    if (!body.pageId || !body.recipientPsid || !body.message) {
+      return { success: false, message: 'pageId, recipientPsid and message are required' };
+    }
+    return this.facebookService.sendDirectMessage(
+      user.tenantId,
+      body.pageId,
+      body.recipientPsid,
+      body.message,
+    );
+  }
+
   @Get('integrations/facebook/diagnose-permissions')
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Diagnose Facebook page token permissions' })
