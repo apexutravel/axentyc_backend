@@ -399,4 +399,11 @@ export class FacebookController {
     }
     return this.facebookService.deleteComment(user.tenantId, body.pageId, body.commentId);
   }
+
+  @Get('integrations/instagram/diagnose')
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Diagnose Instagram connection status' })
+  async diagnoseInstagram(@CurrentUser() user: any) {
+    return this.facebookService.diagnoseInstagram(user.tenantId);
+  }
 }

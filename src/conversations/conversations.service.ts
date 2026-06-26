@@ -168,15 +168,15 @@ export class ConversationsService {
         );
       }
 
-      // Send via Facebook Graph API if it's a Facebook conversation
-      if (conv.channel === 'facebook' && conv.metadata?.externalId) {
+      // Send via Facebook Graph API if it's a Facebook or Instagram conversation
+      if ((conv.channel === 'facebook' || conv.channel === 'instagram') && conv.metadata?.externalId) {
         this.facebookService.sendMessage(
           tenantId,
           conversationId,
           dto.content,
           dto.media ? { url: dto.media.url, mimeType: dto.media.mimeType } : undefined,
         ).catch((err) => {
-          console.error('Failed to send Facebook message:', err);
+          console.error(`Failed to send ${conv.channel} message:`, err);
         });
       }
     }

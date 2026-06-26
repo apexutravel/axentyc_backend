@@ -163,14 +163,14 @@ export class FacebookService {
       }
 
       // Reply to comment via Graph API
-      const url = `${this.graphApiUrl}/${commentId}/comments`;
-      const response = await fetch(url, {
+      const replyUrl = `${this.graphApiUrl}/${commentId}/comments`;
+      const replyParams = new URLSearchParams();
+      replyParams.append('message', message);
+      replyParams.append('access_token', account.accessToken);
+      const response = await fetch(replyUrl, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          message,
-          access_token: account.accessToken,
-        }),
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: replyParams.toString(),
       });
 
       const data = await response.json() as any;
@@ -224,6 +224,22 @@ export class FacebookService {
           'message.new',
           replyMessage,
         );
+
+        // Emit dedicated FB comment reply event for real-time UI updates
+        this.eventsGateway.emitToTenant(tenantId, 'fb.comment.reply', {
+          postId,
+          pageId,
+          parentCommentId: commentId,
+          reply: {
+            id: data.id,
+            from: { id: pageId, name: account.accountName },
+            message,
+            created_time: new Date().toISOString(),
+            like_count: 0,
+            user_likes: false,
+            parent: { id: commentId },
+          },
+        });
       }
 
       return { success: true, commentId: data.id };
@@ -252,40 +268,58 @@ export class FacebookService {
     const normalizedType = (reactionType || 'LIKE').toUpperCase();
     const edge = normalizedType === 'LIKE' ? 'likes' : 'reactions';
     const url = `${this.graphApiUrl}/${objectId}/${edge}`;
-    const body = normalizedType === 'LIKE'
-      ? { access_token: account.accessToken }
-      : { type: normalizedType, access_token: account.accessToken };
+
+    this.logger.log(`[reactToObject] POST ${url} type=${normalizedType} objectId=${objectId}`);
+
+    // Facebook Graph API expects form-urlencoded, not JSON
+    const params = new URLSearchParams();
+    params.append('access_token', account.accessToken);
+    if (normalizedType !== 'LIKE') {
+      params.append('type', normalizedType);
+    }
 
     const response = await fetch(url, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: params.toString(),
     });
 
     const data = await response.json() as any;
     if (data.error) {
-      this.logger.error('Failed to react to Facebook object:', data.error);
+      this.logger.error('Failed to react to Facebook object:', JSON.stringify(data.error));
 
       // If error #3 (capability), diagnose token permissions to give a better message
       if (data.error?.code === 3) {
         let missingPermissions: string[] = [];
+        let grantedPermissions: string[] = [];
         try {
           const debugUrl = `${this.graphApiUrl}/me/permissions?access_token=${account.accessToken}`;
           const debugResp = await fetch(debugUrl);
           const debugData = await debugResp.json() as any;
           if (Array.isArray(debugData?.data)) {
-            const granted = new Set(debugData.data.filter((p: any) => p.status === 'granted').map((p: any) => p.permission));
+            grantedPermissions = debugData.data.filter((p: any) => p.status === 'granted').map((p: any) => p.permission);
+            const granted = new Set(grantedPermissions);
             const required = ['pages_manage_engagement', 'pages_read_engagement'];
             missingPermissions = required.filter(p => !granted.has(p));
-            this.logger.log(`[reactToObject] Token permissions: granted=${[...granted].join(',')}, missing=${missingPermissions.join(',')}`);
+            this.logger.log(`[reactToObject] Token permissions: granted=${grantedPermissions.join(',')}, missing=${missingPermissions.join(',')}`);
           }
         } catch (e) {
           this.logger.warn('[reactToObject] Could not fetch token permissions:', e);
         }
 
-        const message = missingPermissions.length > 0
-          ? `El token de la página no tiene los permisos necesarios (${missingPermissions.join(', ')}). Desconecta y vuelve a conectar la página de Facebook para solicitar los permisos actualizados. Si la app está en producción, verifica que estos permisos estén aprobados en Meta App Review.`
-          : 'La app de Facebook no tiene habilitada la capacidad para esta reacción. Verifica que la app tenga los permisos pages_manage_engagement y pages_read_engagement aprobados en Meta, o desconecta y reconecta la página.';
+        // Check if it's a feature/capability issue vs permission issue
+        const errorMsg = data.error?.message || '';
+        const isCapabilityError = errorMsg.toLowerCase().includes('capability') || errorMsg.toLowerCase().includes('permission');
+
+        let message: string;
+        if (missingPermissions.length > 0) {
+          message = `El token de la página no tiene los permisos necesarios (${missingPermissions.join(', ')}). Desconecta y vuelve a conectar la página de Facebook para solicitar los permisos actualizados.`;
+        } else if (grantedPermissions.includes('pages_manage_engagement')) {
+          // Token has the permission but Facebook still rejects - this is an App Review / feature issue
+          message = `El token tiene el permiso pages_manage_engagement, pero Facebook rechaza la operación. Esto significa que la app necesita acceso avanzado (Advanced Access) para este permiso.\n\nPasos para solucionar:\n1. Ve a developers.facebook.com → tu app → App Review → Permissions and Features\n2. Busca "pages_manage_engagement"\n3. Si está en "Standard Access", solicita "Advanced Access" (requiere App Review)\n4. Si la app está en modo desarrollo, solo funciona para páginas donde eres admin/desarrollador\n5. Después de aprobarse, desconecta y reconecta la página en AXENTYC\n\nError original de Facebook: ${errorMsg}`;
+        } else {
+          message = `Facebook rechazó la reacción. Error: ${errorMsg}`;
+        }
         throw new BadRequestException(message);
       }
 
@@ -295,7 +329,7 @@ export class FacebookService {
     return { success: true };
   }
 
-  async diagnoseTokenPermissions(tenantId: string, pageId: string): Promise<{ permissions: any[]; hasEngagementPermissions: boolean; tokenValid: boolean }> {
+  async diagnoseTokenPermissions(tenantId: string, pageId: string): Promise<{ permissions: any[]; hasEngagementPermissions: boolean; tokenValid: boolean; reactionTestError?: string }> {
     const account = await this.socialAccountModel.findOne({
       tenantId: new Types.ObjectId(tenantId),
       pageId,
@@ -317,7 +351,28 @@ export class FacebookService {
       const permissions = Array.isArray(data?.data) ? data.data : [];
       const granted = new Set(permissions.filter((p: any) => p.status === 'granted').map((p: any) => p.permission));
       const hasEngagement = granted.has('pages_manage_engagement') && granted.has('pages_read_engagement');
-      return { permissions, hasEngagementPermissions: hasEngagement, tokenValid: true };
+
+      // Also get the app's access level for pages_manage_engagement
+      let appReviewInfo: string | undefined;
+      try {
+        // Try to get debug token info to see app features
+        const appTokenUrl = `${this.graphApiUrl}/debug_token?input_token=${account.accessToken}&access_token=${account.accessToken}`;
+        const appResp = await fetch(appTokenUrl);
+        const appData = await appResp.json() as any;
+        if (appData?.data) {
+          this.logger.log(`[diagnoseTokenPermissions] Token debug info: ${JSON.stringify(appData.data)}`);
+          appReviewInfo = appData.data?.scopes?.join(', ') || undefined;
+        }
+      } catch (e) {
+        this.logger.warn('[diagnoseTokenPermissions] Could not fetch debug token info:', e);
+      }
+
+      return { 
+        permissions, 
+        hasEngagementPermissions: hasEngagement, 
+        tokenValid: true,
+        reactionTestError: appReviewInfo,
+      };
     } catch (e) {
       this.logger.error('[diagnoseTokenPermissions] Exception:', e);
       return { permissions: [], hasEngagementPermissions: false, tokenValid: false };
@@ -336,10 +391,13 @@ export class FacebookService {
     }
 
     const url = `${this.graphApiUrl}/${commentId}`;
+    const hideParams = new URLSearchParams();
+    hideParams.append('is_hidden', String(hide));
+    hideParams.append('access_token', account.accessToken);
     const resp = await fetch(url, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ is_hidden: hide, access_token: account.accessToken }),
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: hideParams.toString(),
     });
     const data = await resp.json() as any;
     if (data.error) {
@@ -526,7 +584,10 @@ export class FacebookService {
       'permalink_url',
       'created_time',
       'from{id,name,picture}',
+      'admin_creator{id,name,picture}',
       'message',
+      'story',
+      'status_type',
       'full_picture',
       'reactions.limit(0).summary(true)',
       'likes.limit(0).summary(true)',
@@ -657,6 +718,9 @@ export class FacebookService {
       'pages_read_engagement',
       'pages_manage_engagement',
       'pages_show_list',
+      'instagram_basic',
+      'instagram_manage_messages',
+      'instagram_manage_comments',
     ].join(',');
 
     const params = new URLSearchParams({
@@ -769,6 +833,8 @@ export class FacebookService {
 
     const pages = await Promise.all((data.data || []).map(async (page: any) => {
       let instagramAccount = null;
+      let instagramLinked = false;
+      let instagramError = null;
       
       // Check if page has Instagram Business Account linked
       if (page.instagram_business_account?.id) {
@@ -778,7 +844,9 @@ export class FacebookService {
             page.access_token
           );
           instagramAccount = igData;
-        } catch (err) {
+          instagramLinked = true;
+        } catch (err: any) {
+          instagramError = err.message;
           this.logger.warn(`Failed to get Instagram info for page ${page.id}: ${err.message}`);
         }
       }
@@ -791,10 +859,13 @@ export class FacebookService {
         category: page.category,
         fanCount: page.fan_count,
         instagramAccount,
+        instagramLinked,
+        instagramError,
+        hasInstagramBusinessAccount: !!page.instagram_business_account?.id,
       };
     }));
 
-    this.logger.log(`[getUserPages] Mapped ${pages.length} pages: ${JSON.stringify(pages.map((p: any) => ({ id: p.id, name: p.name, hasInstagram: !!p.instagramAccount })))}`);
+    this.logger.log(`[getUserPages] Mapped ${pages.length} pages: ${JSON.stringify(pages.map((p: any) => ({ id: p.id, name: p.name, hasInstagram: p.instagramLinked, igError: p.instagramError })))}`);
     return pages;
   }
 
@@ -869,8 +940,12 @@ export class FacebookService {
     const instagramAccount = metadata?.instagramAccount;
     if (instagramAccount?.id) {
       this.logger.log(`Instagram account @${instagramAccount.username} detected for page ${pageId}`);
-      // Subscribe Instagram to webhook
-      await this.subscribeInstagramToWebhook(instagramAccount.id, pageAccessToken);
+      // Subscribe Instagram to webhook (non-blocking: don't fail FB connection if IG fails)
+      try {
+        await this.subscribeInstagramToWebhook(instagramAccount.id, pageAccessToken);
+      } catch (err) {
+        this.logger.warn(`Instagram webhook subscription failed for @${instagramAccount.username}: ${err.message}. Facebook page will still be connected.`);
+      }
     }
 
     // Upsert Facebook page account
@@ -963,7 +1038,7 @@ export class FacebookService {
     const accounts = await this.socialAccountModel
       .find({
         tenantId: new Types.ObjectId(tenantId),
-        platform: SocialPlatform.FACEBOOK,
+        platform: { $in: [SocialPlatform.FACEBOOK, SocialPlatform.INSTAGRAM] },
       })
       .exec();
 
@@ -974,6 +1049,104 @@ export class FacebookService {
   }
 
   // ─── Webhook Subscription ───
+
+  async diagnoseInstagram(tenantId: string): Promise<any> {
+    const igAccounts = await this.socialAccountModel
+      .find({
+        tenantId: new Types.ObjectId(tenantId),
+        platform: SocialPlatform.INSTAGRAM,
+      })
+      .exec();
+
+    const fbAccounts = await this.socialAccountModel
+      .find({
+        tenantId: new Types.ObjectId(tenantId),
+        platform: SocialPlatform.FACEBOOK,
+        status: SocialAccountStatus.CONNECTED,
+      })
+      .exec();
+
+    // Check if any FB page has instagram_business_account
+    const fbPagesWithIg = fbAccounts.filter(a => a.metadata?.instagramAccount?.id);
+
+    // Check for existing Instagram conversations
+    const igConversations = await this.conversationModel
+      .find({
+        tenantId: new Types.ObjectId(tenantId),
+        channel: ConversationChannel.INSTAGRAM,
+      })
+      .countDocuments();
+
+    // Check webhook subscription status for each IG account
+    const accountsStatus: any[] = [];
+    for (const ig of igAccounts) {
+      let webhookSubscribed = false;
+      let webhookFields: string[] = [];
+      if (ig.accountId && ig.accessToken) {
+        try {
+          const url = `${this.graphApiUrl}/${ig.accountId}/subscribed_apps?access_token=${ig.accessToken}`;
+          const resp = await fetch(url);
+          const data = await resp.json() as any;
+          if (Array.isArray(data?.data)) {
+            webhookSubscribed = data.data.length > 0;
+            webhookFields = data.data?.flatMap((app: any) => app.subscribed_fields || []) || [];
+          }
+        } catch (e) {
+          this.logger.warn(`[diagnoseInstagram] Could not check webhook subscription for ${ig.accountId}`);
+        }
+      }
+
+      accountsStatus.push({
+        accountId: ig.accountId,
+        accountName: ig.accountName,
+        status: ig.status,
+        hasToken: !!ig.accessToken,
+        pageId: ig.pageId,
+        webhookSubscribed,
+        webhookFields,
+        metadata: ig.metadata,
+      });
+    }
+
+    return {
+      instagramConnected: igAccounts.some(a => a.status === SocialAccountStatus.CONNECTED),
+      instagramAccounts: accountsStatus,
+      fbPagesWithInstagram: fbPagesWithIg.map(a => ({
+        pageId: a.pageId,
+        accountName: a.accountName,
+        instagramAccount: a.metadata?.instagramAccount,
+      })),
+      instagramConversations: igConversations,
+      recommendations: this.getInstagramRecommendations(igAccounts, fbPagesWithIg, igConversations),
+    };
+  }
+
+  private getInstagramRecommendations(igAccounts: any[], fbPagesWithIg: any[], igConversations: number): string[] {
+    const recs: string[] = [];
+    if (igAccounts.length === 0) {
+      if (fbPagesWithIg.length === 0) {
+        recs.push('No hay cuentas de Instagram conectadas. Tu página de Facebook no tiene una cuenta de Instagram Business vinculada.');
+        recs.push('Para conectar Instagram: ve a Facebook → Configuración de la Página → Instagram → vincula tu cuenta de Instagram Business.');
+        recs.push('Después de vincular, desconecta y reconecta la página en AXENTYC.');
+      } else {
+        recs.push('Tu página de Facebook tiene Instagram vinculado pero no se creó la cuenta de Instagram en AXENTYC.');
+        recs.push('Desconecta y reconecta la página de Facebook en AXENTYC para que se cree la cuenta de Instagram.');
+      }
+    } else {
+      const connected = igAccounts.find(a => a.status === SocialAccountStatus.CONNECTED);
+      if (!connected) {
+        recs.push('La cuenta de Instagram existe pero no está conectada. Reconecta la página de Facebook.');
+      }
+    }
+    if (igConversations === 0) {
+      recs.push('No hay conversaciones de Instagram. Asegúrate de que:');
+      recs.push('1. La cuenta de Instagram Business esté conectada');
+      recs.push('2. Los webhooks de Instagram estén suscritos (campos: messages, comments)');
+      recs.push('3. Alguien haya enviado un mensaje directo a tu cuenta de Instagram');
+      recs.push('4. En Meta Developers → Webhooks, el callback URL esté verificado para Instagram');
+    }
+    return recs;
+  }
 
   async resubscribeAllPages(tenantId: string): Promise<any> {
     const accounts = await this.socialAccountModel.find({
@@ -1034,7 +1207,7 @@ export class FacebookService {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         access_token: pageAccessToken,
-        subscribed_fields: ['messages', 'messaging_postbacks', 'message_reads', 'comments', 'mentions'],
+        subscribed_fields: ['messages', 'messaging_postbacks', 'comments', 'mentions', 'message_reactions', 'message_edit'],
       }),
     });
 
@@ -1240,7 +1413,7 @@ export class FacebookService {
       status: MessageStatus.SENT,
       metadata: {
         externalId: message.mid,
-        platform: 'facebook',
+        platform,
       },
     });
     const savedMessage = await newMessage.save();
@@ -1414,6 +1587,20 @@ export class FacebookService {
       contact,
     );
 
+    // Emit dedicated FB comment event for real-time UI updates
+    this.eventsGateway.emitToTenant(tenantId, 'fb.comment.new', {
+      postId: post_id,
+      pageId,
+      comment: {
+        id: comment_id,
+        from: { id: commenterId, name: commenterName, picture: contact.avatar ? { data: { url: contact.avatar } } : undefined },
+        message: commentText || '',
+        created_time: created_time ? new Date(created_time * 1000).toISOString() : new Date().toISOString(),
+        like_count: 0,
+        user_likes: false,
+      },
+    });
+
     this.logger.log(`Comment saved as message in conversation ${conversation._id}`);
   }
 
@@ -1503,31 +1690,42 @@ export class FacebookService {
       _id: new Types.ObjectId(conversationId),
       tenantId: new Types.ObjectId(tenantId),
     });
-    if (!conversation || conversation.channel !== ConversationChannel.FACEBOOK) {
+    if (!conversation) {
+      return false;
+    }
+
+    const isFacebook = conversation.channel === ConversationChannel.FACEBOOK;
+    const isInstagram = conversation.channel === ConversationChannel.INSTAGRAM;
+    if (!isFacebook && !isInstagram) {
       return false;
     }
 
     const externalId = conversation.metadata?.externalId; // sender PSID
     const pageId = conversation.metadata?.pageId;
-    if (!externalId || !pageId) {
-      this.logger.warn(`Missing externalId or pageId for conversation ${conversationId}`);
+    const accountId = conversation.metadata?.accountId;
+    if (!externalId || (!pageId && !accountId)) {
+      this.logger.warn(`Missing externalId or pageId/accountId for conversation ${conversationId}`);
       return false;
     }
 
-    // Find the page access token
+    // Find the social account (Facebook page or Instagram account)
+    const lookupId = pageId || accountId;
+    const platformType = isInstagram ? SocialPlatform.INSTAGRAM : SocialPlatform.FACEBOOK;
     const account = await this.socialAccountModel.findOne({
       tenantId: new Types.ObjectId(tenantId),
-      platform: SocialPlatform.FACEBOOK,
-      pageId,
+      $or: [
+        { pageId: lookupId, platform: platformType },
+        { accountId: lookupId, platform: platformType },
+      ],
       status: SocialAccountStatus.CONNECTED,
     });
 
     if (!account?.accessToken) {
-      this.logger.warn(`No access token for page ${pageId}`);
+      this.logger.warn(`No access token for ${isInstagram ? 'Instagram' : 'Facebook'} account ${lookupId}`);
       return false;
     }
 
-    // Build Graph API message
+    // Build Graph API message (same endpoint for both FB and IG)
     const messagePayload: any = {
       recipient: { id: externalId },
       messaging_type: 'RESPONSE',
@@ -1559,11 +1757,11 @@ export class FacebookService {
 
     const result = await response.json() as any;
     if (result.error) {
-      this.logger.error(`Failed to send FB message: ${result.error.message}`);
+      this.logger.error(`Failed to send ${isInstagram ? 'Instagram' : 'FB'} message: ${result.error.message}`);
       return false;
     }
 
-    this.logger.log(`FB message sent to ${externalId}, mid: ${result.message_id}`);
+    this.logger.log(`${isInstagram ? 'IG' : 'FB'} message sent to ${externalId}, mid: ${result.message_id}`);
     return true;
   }
 

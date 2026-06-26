@@ -58,10 +58,16 @@ export class Conversation {
   metadata?: {
     externalId?: string;
     pageId?: string;
+    accountId?: string;
+    pageName?: string;
     threadId?: string;
     widgetId?: string;
     visitorId?: string;
     isGuest?: boolean;
+    isComment?: boolean;
+    postId?: string;
+    mediaId?: string;
+    platform?: string;
     visitorData?: {
       name?: string;
       email?: string;
