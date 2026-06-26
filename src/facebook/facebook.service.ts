@@ -265,13 +265,63 @@ export class FacebookService {
     const data = await response.json() as any;
     if (data.error) {
       this.logger.error('Failed to react to Facebook object:', data.error);
-      const message = data.error?.code === 3
-        ? 'La app de Facebook no tiene habilitada la capacidad para esta reacción. Prueba con Me gusta o revisa permisos/features en Meta.'
-        : data.error.message || 'Failed to react to Facebook object';
-      throw new BadRequestException(message);
+
+      // If error #3 (capability), diagnose token permissions to give a better message
+      if (data.error?.code === 3) {
+        let missingPermissions: string[] = [];
+        try {
+          const debugUrl = `${this.graphApiUrl}/me/permissions?access_token=${account.accessToken}`;
+          const debugResp = await fetch(debugUrl);
+          const debugData = await debugResp.json() as any;
+          if (Array.isArray(debugData?.data)) {
+            const granted = new Set(debugData.data.filter((p: any) => p.status === 'granted').map((p: any) => p.permission));
+            const required = ['pages_manage_engagement', 'pages_read_engagement'];
+            missingPermissions = required.filter(p => !granted.has(p));
+            this.logger.log(`[reactToObject] Token permissions: granted=${[...granted].join(',')}, missing=${missingPermissions.join(',')}`);
+          }
+        } catch (e) {
+          this.logger.warn('[reactToObject] Could not fetch token permissions:', e);
+        }
+
+        const message = missingPermissions.length > 0
+          ? `El token de la página no tiene los permisos necesarios (${missingPermissions.join(', ')}). Desconecta y vuelve a conectar la página de Facebook para solicitar los permisos actualizados. Si la app está en producción, verifica que estos permisos estén aprobados en Meta App Review.`
+          : 'La app de Facebook no tiene habilitada la capacidad para esta reacción. Verifica que la app tenga los permisos pages_manage_engagement y pages_read_engagement aprobados en Meta, o desconecta y reconecta la página.';
+        throw new BadRequestException(message);
+      }
+
+      throw new BadRequestException(data.error.message || 'Failed to react to Facebook object');
     }
 
     return { success: true };
+  }
+
+  async diagnoseTokenPermissions(tenantId: string, pageId: string): Promise<{ permissions: any[]; hasEngagementPermissions: boolean; tokenValid: boolean }> {
+    const account = await this.socialAccountModel.findOne({
+      tenantId: new Types.ObjectId(tenantId),
+      pageId,
+      platform: SocialPlatform.FACEBOOK,
+      status: SocialAccountStatus.CONNECTED,
+    });
+    if (!account?.accessToken) {
+      return { permissions: [], hasEngagementPermissions: false, tokenValid: false };
+    }
+
+    try {
+      const debugUrl = `${this.graphApiUrl}/me/permissions?access_token=${account.accessToken}`;
+      const resp = await fetch(debugUrl);
+      const data = await resp.json() as any;
+      if (data.error) {
+        this.logger.error('[diagnoseTokenPermissions] Error:', data.error);
+        return { permissions: [], hasEngagementPermissions: false, tokenValid: false };
+      }
+      const permissions = Array.isArray(data?.data) ? data.data : [];
+      const granted = new Set(permissions.filter((p: any) => p.status === 'granted').map((p: any) => p.permission));
+      const hasEngagement = granted.has('pages_manage_engagement') && granted.has('pages_read_engagement');
+      return { permissions, hasEngagementPermissions: hasEngagement, tokenValid: true };
+    } catch (e) {
+      this.logger.error('[diagnoseTokenPermissions] Exception:', e);
+      return { permissions: [], hasEngagementPermissions: false, tokenValid: false };
+    }
   }
 
   async hideComment(tenantId: string, pageId: string, commentId: string, hide: boolean): Promise<{ success: boolean }> {

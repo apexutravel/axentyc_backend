@@ -343,6 +343,19 @@ export class FacebookController {
     );
   }
 
+  @Get('integrations/facebook/diagnose-permissions')
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Diagnose Facebook page token permissions' })
+  async diagnosePermissions(
+    @CurrentUser() user: any,
+    @Query('pageId') pageId: string,
+  ) {
+    if (!pageId) {
+      return { success: false, message: 'pageId is required' };
+    }
+    return this.facebookService.diagnoseTokenPermissions(user.tenantId, pageId);
+  }
+
   @Post('integrations/facebook/hide-comment')
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Hide/Unhide a Facebook comment' })
