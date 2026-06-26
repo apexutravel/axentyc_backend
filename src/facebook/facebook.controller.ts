@@ -306,4 +306,66 @@ export class FacebookController {
     const lim = limit ? parseInt(limit) : 10;
     return this.facebookService.getPageFeed(user.tenantId, pageId, lim);
   }
+
+  @Post('integrations/facebook/reply-comment')
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Reply to a Facebook comment' })
+  async replyToComment(
+    @CurrentUser() user: any,
+    @Body() body: { commentId: string; message: string; pageId?: string; postId?: string },
+  ) {
+    if (!body.commentId || !body.message) {
+      return { success: false, message: 'commentId and message are required' };
+    }
+    return this.facebookService.replyToComment(
+      user.tenantId,
+      body.commentId,
+      body.message,
+      { pageId: body.pageId, postId: body.postId },
+    );
+  }
+
+  @Post('integrations/facebook/react')
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'React to a Facebook post or comment' })
+  async reactToObject(
+    @CurrentUser() user: any,
+    @Body() body: { objectId: string; pageId: string; reactionType: string },
+  ) {
+    if (!body.objectId || !body.pageId) {
+      return { success: false, message: 'objectId and pageId are required' };
+    }
+    return this.facebookService.reactToObject(
+      user.tenantId,
+      body.pageId,
+      body.objectId,
+      body.reactionType || 'LIKE',
+    );
+  }
+
+  @Post('integrations/facebook/hide-comment')
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Hide/Unhide a Facebook comment' })
+  async hideComment(
+    @CurrentUser() user: any,
+    @Body() body: { commentId: string; pageId: string; hide: boolean },
+  ) {
+    if (!body.commentId || !body.pageId) {
+      return { success: false, message: 'commentId and pageId are required' };
+    }
+    return this.facebookService.hideComment(user.tenantId, body.pageId, body.commentId, !!body.hide);
+  }
+
+  @Post('integrations/facebook/delete-comment')
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Delete a Facebook comment' })
+  async deleteComment(
+    @CurrentUser() user: any,
+    @Body() body: { commentId: string; pageId: string },
+  ) {
+    if (!body.commentId || !body.pageId) {
+      return { success: false, message: 'commentId and pageId are required' };
+    }
+    return this.facebookService.deleteComment(user.tenantId, body.pageId, body.commentId);
+  }
 }

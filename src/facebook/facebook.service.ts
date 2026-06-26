@@ -127,6 +127,206 @@ export class FacebookService {
     }
   }
 
+  // ─── Reply to / Moderate Comments ───
+
+  async replyToComment(
+    tenantId: string,
+    commentId: string,
+    message: string,
+    opts?: { pageId?: string; postId?: string },
+  ): Promise<{ success: boolean; commentId?: string }> {
+    try {
+      // Try to locate conversation/message first to infer page/post
+      let existingMessage = await this.messageModel.findOne({
+        tenantId: new Types.ObjectId(tenantId),
+        'metadata.commentId': commentId,
+      });
+
+      // Prefer request-provided identifiers
+      let postId = opts?.postId || existingMessage?.metadata?.postId;
+      let pageId = opts?.pageId || (postId ? postId.split('_')[0] : undefined);
+
+      if (!pageId) {
+        throw new BadRequestException('pageId is required to reply to a comment');
+      }
+
+      // Find the social account
+      const account = await this.socialAccountModel.findOne({
+        tenantId: new Types.ObjectId(tenantId),
+        pageId,
+        platform: SocialPlatform.FACEBOOK,
+        status: SocialAccountStatus.CONNECTED,
+      });
+
+      if (!account?.accessToken) {
+        throw new BadRequestException('Facebook page not connected or missing access token');
+      }
+
+      // Reply to comment via Graph API
+      const url = `${this.graphApiUrl}/${commentId}/comments`;
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          message,
+          access_token: account.accessToken,
+        }),
+      });
+
+      const data = await response.json() as any;
+      if (data.error) {
+        this.logger.error('Failed to reply to comment:', data.error);
+        throw new BadRequestException(data.error.message || 'Failed to reply to comment');
+      }
+
+      this.logger.log(`Replied to comment ${commentId}: ${data.id}`);
+
+      // Save the reply as an outbound message (if we can associate it)
+      // Try to resolve conversation from existing message or by postId
+      let conversation = existingMessage
+        ? await this.conversationModel.findById(existingMessage.conversationId)
+        : null;
+      if (!conversation && postId) {
+        conversation = await this.conversationModel.findOne({
+          tenantId: new Types.ObjectId(tenantId),
+          'metadata.postId': postId,
+        }) as any;
+      }
+      if (conversation) {
+        const replyMessage = new this.messageModel({
+          tenantId: new Types.ObjectId(tenantId),
+          conversationId: conversation._id,
+          direction: MessageDirection.OUTBOUND,
+          type: MessageType.TEXT,
+          content: message,
+          senderName: account.accountName,
+          status: MessageStatus.SENT,
+          metadata: {
+            commentId: data.id,
+            postId,
+            platform: 'facebook',
+            isComment: true,
+            parentCommentId: commentId,
+          },
+        });
+
+        await replyMessage.save();
+
+        // Update conversation
+        await this.conversationModel.findByIdAndUpdate(conversation._id, {
+          lastMessage: message,
+          lastMessageAt: new Date(),
+        });
+
+        // Emit real-time event
+        this.eventsGateway.emitToConversation(
+          conversation._id.toString(),
+          'message.new',
+          replyMessage,
+        );
+      }
+
+      return { success: true, commentId: data.id };
+    } catch (error: any) {
+      this.logger.error('Error replying to comment:', error);
+      throw error;
+    }
+  }
+
+  async reactToObject(
+    tenantId: string,
+    pageId: string,
+    objectId: string,
+    reactionType: string,
+  ): Promise<{ success: boolean }> {
+    const account = await this.socialAccountModel.findOne({
+      tenantId: new Types.ObjectId(tenantId),
+      pageId,
+      platform: SocialPlatform.FACEBOOK,
+      status: SocialAccountStatus.CONNECTED,
+    });
+    if (!account?.accessToken) {
+      throw new BadRequestException('Facebook page not connected or missing access token');
+    }
+
+    const normalizedType = (reactionType || 'LIKE').toUpperCase();
+    const edge = normalizedType === 'LIKE' ? 'likes' : 'reactions';
+    const url = `${this.graphApiUrl}/${objectId}/${edge}`;
+    const body = normalizedType === 'LIKE'
+      ? { access_token: account.accessToken }
+      : { type: normalizedType, access_token: account.accessToken };
+
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+
+    const data = await response.json() as any;
+    if (data.error) {
+      this.logger.error('Failed to react to Facebook object:', data.error);
+      const message = data.error?.code === 3
+        ? 'La app de Facebook no tiene habilitada la capacidad para esta reacción. Prueba con Me gusta o revisa permisos/features en Meta.'
+        : data.error.message || 'Failed to react to Facebook object';
+      throw new BadRequestException(message);
+    }
+
+    return { success: true };
+  }
+
+  async hideComment(tenantId: string, pageId: string, commentId: string, hide: boolean): Promise<{ success: boolean }> {
+    const account = await this.socialAccountModel.findOne({
+      tenantId: new Types.ObjectId(tenantId),
+      pageId,
+      platform: SocialPlatform.FACEBOOK,
+      status: SocialAccountStatus.CONNECTED,
+    });
+    if (!account?.accessToken) {
+      throw new BadRequestException('Facebook page not connected or missing access token');
+    }
+
+    const url = `${this.graphApiUrl}/${commentId}`;
+    const resp = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ is_hidden: hide, access_token: account.accessToken }),
+    });
+    const data = await resp.json() as any;
+    if (data.error) {
+      this.logger.error('Failed to hide/unhide comment:', data.error);
+      throw new BadRequestException(data.error.message || 'Failed to hide/unhide comment');
+    }
+    return { success: true };
+  }
+
+  async deleteComment(tenantId: string, pageId: string, commentId: string): Promise<{ success: boolean }> {
+    const account = await this.socialAccountModel.findOne({
+      tenantId: new Types.ObjectId(tenantId),
+      pageId,
+      platform: SocialPlatform.FACEBOOK,
+      status: SocialAccountStatus.CONNECTED,
+    });
+    if (!account?.accessToken) {
+      throw new BadRequestException('Facebook page not connected or missing access token');
+    }
+
+    const url = `${this.graphApiUrl}/${commentId}?access_token=${account.accessToken}`;
+    const resp = await fetch(url, { method: 'DELETE' });
+    if (!resp.ok) {
+      try {
+        const data = await resp.json() as any;
+        if (data?.error) {
+          this.logger.error('Failed to delete comment:', data.error);
+          throw new BadRequestException(data.error.message || 'Failed to delete comment');
+        }
+      } catch (e) {
+        // ignore json parse error
+      }
+      throw new BadRequestException('Failed to delete comment');
+    }
+    return { success: true };
+  }
+
   // ─── Manual Sync (Fallback when webhooks are not delivering) ───
 
   async syncCommentsForTenant(tenantId: string, pageId?: string): Promise<{ success: boolean; results: any[] }> {
@@ -151,10 +351,12 @@ export class FacebookService {
           'id',
           'permalink_url',
           'created_time',
-          'from',
+          'from{id,name,picture}',
           'message',
           'full_picture',
-          'comments.limit(100){id,from,message,created_time,parent{id}}',
+          'reactions.limit(0).summary(true)',
+          'likes.limit(0).summary(true)',
+          'comments.limit(100){id,from{id,name,picture},message,created_time,parent{id},like_count,user_likes}',
         ].join(',');
         const url = `${this.graphApiUrl}/${account.pageId}/feed?fields=${encodeURIComponent(fields)}&limit=10&access_token=${account.accessToken}`;
         this.logger.log(`[Sync] Fetching posts for page ${account.pageId}`);
@@ -254,19 +456,6 @@ export class FacebookService {
       $inc: { unreadCount: isBeingViewed ? 0 : 1 },
     });
 
-    // Emit events
-    this.eventsGateway.emitMessageReceived(
-      tenantId,
-      conversation._id.toString(),
-      savedMessage,
-      contact,
-    );
-    this.eventsGateway.emitToConversation(
-      conversation._id.toString(),
-      'message.new',
-      savedMessage,
-    );
-
     return true;
   }
 
@@ -286,10 +475,12 @@ export class FacebookService {
       'id',
       'permalink_url',
       'created_time',
-      'from',
+      'from{id,name,picture}',
       'message',
       'full_picture',
-      'comments.limit(50){id,from,message,created_time,parent{id}}',
+      'reactions.limit(0).summary(true)',
+      'likes.limit(0).summary(true)',
+      'comments.limit(100){id,from{id,name,picture},message,created_time,parent{id},like_count,user_likes,comments{id,from{id,name,picture},message,created_time,parent{id},like_count,user_likes}}',
     ].join(',');
     const url = `${this.graphApiUrl}/${pageId}/feed?fields=${encodeURIComponent(fields)}&limit=${limit}&access_token=${account.accessToken}`;
     const resp = await fetch(url);
@@ -297,7 +488,45 @@ export class FacebookService {
     if (data.error) {
       throw new BadRequestException(data.error?.message || 'Failed to fetch page feed');
     }
-    return { pageId, posts: Array.isArray(data?.data) ? data.data : [] };
+    const posts = Array.isArray(data?.data) ? data.data : [];
+    await this.enrichFeedAvatars(posts, account.accessToken);
+    return { pageId, posts };
+  }
+
+  private async enrichFeedAvatars(posts: any[], pageAccessToken: string): Promise<void> {
+    const profileCache = new Map<string, string | null>();
+
+    const enrichProfile = async (profile: any) => {
+      const profileId = profile?.id;
+      if (!profileId || profile?.picture?.data?.url) return;
+      if (!profileCache.has(profileId)) {
+        try {
+          const fields = 'picture.type(normal).width(80).height(80),profile_pic';
+          const url = `${this.graphApiUrl}/${profileId}?fields=${encodeURIComponent(fields)}&access_token=${pageAccessToken}`;
+          const resp = await fetch(url);
+          const data = await resp.json() as any;
+          profileCache.set(profileId, data?.picture?.data?.url || data?.profile_pic || null);
+        } catch {
+          profileCache.set(profileId, null);
+        }
+      }
+      const url = profileCache.get(profileId);
+      if (url) {
+        profile.picture = { data: { url } };
+      }
+    };
+
+    for (const post of posts) {
+      await enrichProfile(post?.from);
+      const comments = post?.comments?.data || [];
+      for (const comment of comments) {
+        await enrichProfile(comment?.from);
+        const replies = comment?.comments?.data || [];
+        for (const reply of replies) {
+          await enrichProfile(reply?.from);
+        }
+      }
+    }
   }
 
   // Get tenant-specific Facebook config from database (DEPRECATED - kept for migration)
@@ -1032,7 +1261,7 @@ export class FacebookService {
           status: SocialAccountStatus.CONNECTED,
         });
         if (accountForFetch?.accessToken) {
-          const fields = 'from{id,name},message,created_time,permalink_url';
+          const fields = 'from{id,name,picture},message,created_time,permalink_url,like_count,user_likes';
           const url = `${this.graphApiUrl}/${comment_id}?fields=${fields}&access_token=${accountForFetch.accessToken}`;
           this.logger.debug(`[Feed] Fetching comment details from Graph API: ${url}`);
           const resp = await fetch(url);
@@ -1120,18 +1349,11 @@ export class FacebookService {
       $inc: { unreadCount: isBeingViewedFb ? 0 : 1 },
     });
 
-    // Emit real-time events
     this.eventsGateway.emitMessageReceived(
       tenantId,
       conversation._id.toString(),
       savedMessage,
       contact,
-    );
-
-    this.eventsGateway.emitToConversation(
-      conversation._id.toString(),
-      'message.new',
-      savedMessage,
     );
 
     this.logger.log(`Comment saved as message in conversation ${conversation._id}`);
@@ -1206,20 +1428,6 @@ export class FacebookService {
       status: ConversationStatus.OPEN,
       $inc: { unreadCount: isBeingViewedIg ? 0 : 1 },
     });
-
-    // Emit real-time events
-    this.eventsGateway.emitMessageReceived(
-      tenantId,
-      conversation._id.toString(),
-      savedMessage,
-      contact,
-    );
-
-    this.eventsGateway.emitToConversation(
-      conversation._id.toString(),
-      'message.new',
-      savedMessage,
-    );
 
     this.logger.log(`Instagram comment saved as message in conversation ${conversation._id}`);
   }
@@ -1364,7 +1572,7 @@ export class FacebookService {
   ): Promise<any> {
     const channel = platform === 'instagram' ? ConversationChannel.INSTAGRAM : ConversationChannel.FACEBOOK;
     
-    // Try to find existing conversation
+    // Try to find existing conversation by externalId (Facebook PSID)
     const existing = await this.conversationModel.findOne({
       tenantId: new Types.ObjectId(tenantId),
       channel,
@@ -1375,7 +1583,9 @@ export class FacebookService {
       ],
     });
 
-    if (existing) return existing;
+    if (existing) {
+      return existing;
+    }
 
     // Create new conversation
     const subject = platform === 'instagram' ? 'Instagram DM' : 'Facebook Messenger';
@@ -1416,25 +1626,27 @@ export class FacebookService {
     pageId: string,
     pageName: string,
   ): Promise<any> {
-    // Try to find existing conversation for this post
+    // Try to find existing conversation for this person (by externalId, not by post)
+    // This way all comments from the same person go to the same conversation
     const existing = await this.conversationModel.findOne({
       tenantId: new Types.ObjectId(tenantId),
       channel: ConversationChannel.FACEBOOK,
-      'metadata.postId': postId,
+      'metadata.externalId': commenterId,
       'metadata.pageId': pageId,
+      'metadata.isComment': true,
     }).populate('contactId');
 
     if (existing) return existing;
 
-    // Create new conversation for this post's comments
+    // Create new conversation for this person's comments
     const newConversation = new this.conversationModel({
       tenantId: new Types.ObjectId(tenantId),
       contactId: new Types.ObjectId(contactId),
       channel: ConversationChannel.FACEBOOK,
-      subject: `Comentario en publicación`,
+      subject: `Comentarios Facebook`,
       status: ConversationStatus.OPEN,
       metadata: {
-        postId,
+        postId, // Keep first post ID for reference
         pageId,
         pageName,
         isComment: true,
@@ -1443,7 +1655,6 @@ export class FacebookService {
     });
     const saved = await newConversation.save();
     const populated = await saved.populate('contactId');
-    this.eventsGateway.emitToTenant(tenantId, 'conversation.created', populated);
     this.logger.log(`New Facebook comment conversation created: ${saved._id}`);
     return populated;
   }
@@ -1456,25 +1667,27 @@ export class FacebookService {
     igAccountId: string,
     accountName: string,
   ): Promise<any> {
-    // Try to find existing conversation for this Instagram post
+    // Try to find existing conversation for this person (by externalId, not by media)
+    // This way all comments from the same person go to the same conversation
     const existing = await this.conversationModel.findOne({
       tenantId: new Types.ObjectId(tenantId),
       channel: ConversationChannel.INSTAGRAM,
-      'metadata.mediaId': mediaId,
+      'metadata.externalId': commenterId,
       'metadata.accountId': igAccountId,
+      'metadata.isComment': true,
     }).populate('contactId');
 
     if (existing) return existing;
 
-    // Create new conversation for this Instagram post's comments
+    // Create new conversation for this person's Instagram comments
     const newConversation = new this.conversationModel({
       tenantId: new Types.ObjectId(tenantId),
       contactId: new Types.ObjectId(contactId),
       channel: ConversationChannel.INSTAGRAM,
-      subject: `Comentario en Instagram`,
+      subject: `Comentarios Instagram`,
       status: ConversationStatus.OPEN,
       metadata: {
-        mediaId,
+        mediaId, // Keep first media ID for reference
         accountId: igAccountId,
         pageName: accountName,
         isComment: true,
@@ -1483,7 +1696,6 @@ export class FacebookService {
     });
     const saved = await newConversation.save();
     const populated = await saved.populate('contactId');
-    this.eventsGateway.emitToTenant(tenantId, 'conversation.created', populated);
     this.logger.log(`New Instagram comment conversation created: ${saved._id}`);
     return populated;
   }

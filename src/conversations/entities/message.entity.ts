@@ -69,6 +69,11 @@ export class Message {
     replyTo?: string;
     widgetId?: string;
     visitorId?: string;
+    commentId?: string;
+    postId?: string;
+    isComment?: boolean;
+    commentCreatedAt?: string;
+    parentCommentId?: string;
   };
 
   @Prop({ type: Boolean, default: false })

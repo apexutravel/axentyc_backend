@@ -56,7 +56,10 @@ export class ConversationsService {
     assignedTo?: string;
     tags?: string[];
   }): Promise<Conversation[]> {
-    const query: any = { tenantId: new Types.ObjectId(tenantId) };
+    const query: any = {
+      tenantId: new Types.ObjectId(tenantId),
+      'metadata.isComment': { $ne: true },
+    };
 
     if (filters?.status) query.status = filters.status;
     if (filters?.channel) query.channel = filters.channel;
