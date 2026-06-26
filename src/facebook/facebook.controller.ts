@@ -58,6 +58,9 @@ export class FacebookController {
     @Req() req: Request,
   ) {
     this.logger.log(`Facebook webhook received: ${body?.object || 'unknown'} with ${Array.isArray(body?.entry) ? body.entry.length : 0} entr${Array.isArray(body?.entry) && body.entry.length === 1 ? 'y' : 'ies'}`);
+    if (body?.object === 'instagram') {
+      this.logger.warn(`[WEBHOOK] ⚠️ INSTAGRAM webhook received! Entries: ${JSON.stringify(body.entry?.map((e: any) => ({ id: e.id, hasMessaging: !!(e.messaging?.length), hasChanges: !!(e.changes?.length) })))}`);
+    }
     this.logger.debug(`Full webhook payload: ${JSON.stringify(body)}`);
 
     // Verify signature if app secret is configured (log warnings but always process)
@@ -405,5 +408,13 @@ export class FacebookController {
   @ApiOperation({ summary: 'Diagnose Instagram connection status' })
   async diagnoseInstagram(@CurrentUser() user: any) {
     return this.facebookService.diagnoseInstagram(user.tenantId);
+  }
+
+  @Post('integrations/instagram/sync-messages')
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Sync Instagram DMs from Graph API (polling fallback)' })
+  async syncInstagramMessages(@CurrentUser() user: any) {
+    const result = await this.facebookService.syncInstagramMessages(user.tenantId);
+    return { success: true, ...result };
   }
 }

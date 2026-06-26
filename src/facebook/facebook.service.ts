@@ -112,6 +112,18 @@ export class FacebookService {
       if (totalSynced > 0) {
         this.logger.log(`[Auto-Sync] Completed: ${totalSynced} new comments synced`);
       }
+
+      // Also sync Instagram DMs for each tenant
+      for (const [tenantId] of tenantMap) {
+        try {
+          const igResult = await this.syncInstagramMessages(tenantId);
+          if (igResult.newMessages > 0) {
+            this.logger.log(`[Auto-Sync] Synced ${igResult.newMessages} new IG DMs for tenant ${tenantId}`);
+          }
+        } catch (e: any) {
+          this.logger.error(`[Auto-Sync] Error syncing IG DMs for tenant ${tenantId}: ${e.message}`);
+        }
+      }
     } catch (e: any) {
       this.logger.error(`[Auto-Sync] Fatal error: ${e.message}`);
     }
@@ -997,6 +1009,11 @@ export class FacebookService {
         { upsert: true, new: true },
       );
       this.logger.log(`Instagram account @${instagramAccount.username} connected for tenant ${tenantId}`);
+
+      // Sync existing Instagram DMs immediately
+      this.syncInstagramMessages(tenantId).catch((e) => {
+        this.logger.warn(`Initial IG DM sync failed for tenant ${tenantId}: ${e.message}`);
+      });
     }
 
     this.logger.log(`Facebook page "${pageName}" (${pageId}) connected for tenant ${tenantId}`);
@@ -1007,19 +1024,25 @@ export class FacebookService {
     const account = await this.socialAccountModel.findOne({
       _id: accountId,
       tenantId: new Types.ObjectId(tenantId),
-      platform: SocialPlatform.FACEBOOK,
     });
 
     if (!account) {
-      throw new NotFoundException('Facebook account not found');
+      throw new NotFoundException('Social account not found');
     }
 
     // Unsubscribe from webhook
     if (account.pageId && account.accessToken) {
       try {
-        await this.unsubscribePageFromWebhook(account.pageId, account.accessToken);
+        if (account.platform === SocialPlatform.INSTAGRAM && account.accountId) {
+          // Unsubscribe Instagram webhook
+          const url = `${this.graphApiUrl}/${account.accountId}/subscribed_apps?access_token=${account.accessToken}`;
+          await fetch(url, { method: 'DELETE' });
+          this.logger.log(`Instagram account ${account.accountId} unsubscribed from webhook events`);
+        } else {
+          await this.unsubscribePageFromWebhook(account.pageId, account.accessToken);
+        }
       } catch (e) {
-        this.logger.warn(`Failed to unsubscribe page ${account.pageId} from webhook: ${e}`);
+        this.logger.warn(`Failed to unsubscribe ${account.platform} account from webhook: ${e}`);
       }
     }
 
@@ -1028,7 +1051,24 @@ export class FacebookService {
     account.isActive = false;
     await account.save();
 
-    this.logger.log(`Facebook page disconnected for tenant ${tenantId}`);
+    // If disconnecting a Facebook page, also disconnect its linked Instagram account
+    if (account.platform === SocialPlatform.FACEBOOK && account.pageId) {
+      const igAccount = await this.socialAccountModel.findOne({
+        tenantId: new Types.ObjectId(tenantId),
+        platform: SocialPlatform.INSTAGRAM,
+        pageId: account.pageId,
+        status: SocialAccountStatus.CONNECTED,
+      });
+      if (igAccount) {
+        igAccount.status = SocialAccountStatus.DISCONNECTED;
+        igAccount.accessToken = undefined;
+        igAccount.isActive = false;
+        await igAccount.save();
+        this.logger.log(`Linked Instagram account ${igAccount.accountId} also disconnected`);
+      }
+    }
+
+    this.logger.log(`${account.platform} account "${account.accountName}" disconnected for tenant ${tenantId}`);
   }
 
   async getStatus(tenantId: string): Promise<{
@@ -1077,12 +1117,33 @@ export class FacebookService {
       })
       .countDocuments();
 
-    // Check webhook subscription status for each IG account
+    // Check webhook subscription status and token validity for each IG account
     const accountsStatus: any[] = [];
     for (const ig of igAccounts) {
       let webhookSubscribed = false;
       let webhookFields: string[] = [];
+      let tokenValid = false;
+      let tokenError: string | null = null;
+      let profileInfo: any = null;
+
       if (ig.accountId && ig.accessToken) {
+        // Test token validity by fetching IG profile
+        try {
+          const profileUrl = `${this.graphApiUrl}/${ig.accountId}?fields=id,username,name,profile_picture_url&access_token=${ig.accessToken}`;
+          const profileResp = await fetch(profileUrl);
+          const profileData = await profileResp.json() as any;
+          if (profileData.error) {
+            tokenError = profileData.error.message;
+            this.logger.warn(`[diagnoseInstagram] Token error for ${ig.accountId}: ${profileData.error.message}`);
+          } else {
+            tokenValid = true;
+            profileInfo = profileData;
+          }
+        } catch (e: any) {
+          tokenError = e.message;
+        }
+
+        // Check webhook subscription
         try {
           const url = `${this.graphApiUrl}/${ig.accountId}/subscribed_apps?access_token=${ig.accessToken}`;
           const resp = await fetch(url);
@@ -1101,6 +1162,9 @@ export class FacebookService {
         accountName: ig.accountName,
         status: ig.status,
         hasToken: !!ig.accessToken,
+        tokenValid,
+        tokenError,
+        profileInfo,
         pageId: ig.pageId,
         webhookSubscribed,
         webhookFields,
@@ -1137,13 +1201,26 @@ export class FacebookService {
       if (!connected) {
         recs.push('La cuenta de Instagram existe pero no está conectada. Reconecta la página de Facebook.');
       }
+      // Check for token errors
+      const tokenErrors = igAccounts.filter(a => a.tokenError);
+      if (tokenErrors.length > 0) {
+        recs.push('⚠️ El token de acceso de Instagram es inválido: ' + tokenErrors[0].tokenError);
+        recs.push('Desconecta y reconecta la página de Facebook en AXENTYC para obtener un token nuevo.');
+      }
+      // Check webhook subscription
+      const notSubscribed = igAccounts.filter(a => !a.webhookSubscribed);
+      if (notSubscribed.length > 0) {
+        recs.push('⚠️ La cuenta de Instagram no está suscrita a webhooks.');
+        recs.push('En Meta Developers → Webhooks → Instagram, verifica que el callback URL esté configurado.');
+        recs.push('Luego desconecta y reconecta la página en AXENTYC para re-suscribir.');
+      }
     }
     if (igConversations === 0) {
-      recs.push('No hay conversaciones de Instagram. Asegúrate de que:');
-      recs.push('1. La cuenta de Instagram Business esté conectada');
-      recs.push('2. Los webhooks de Instagram estén suscritos (campos: messages, comments)');
-      recs.push('3. Alguien haya enviado un mensaje directo a tu cuenta de Instagram');
-      recs.push('4. En Meta Developers → Webhooks, el callback URL esté verificado para Instagram');
+      recs.push('No hay conversaciones de Instagram. Verifica:');
+      recs.push('1. Meta Developers → Webhooks → Instagram: callback URL verificado y campos suscritos (messages, comments)');
+      recs.push('2. La cuenta de Instagram debe ser Business o Creator (no personal)');
+      recs.push('3. En Meta Developers → Roles → Instagram Testers: agrega tu cuenta como tester si la app está en desarrollo');
+      recs.push('4. Envía un DM desde otra cuenta de Instagram a la tuya para probar');
     }
     return recs;
   }
@@ -1762,6 +1839,26 @@ export class FacebookService {
     }
 
     this.logger.log(`${isInstagram ? 'IG' : 'FB'} message sent to ${externalId}, mid: ${result.message_id}`);
+
+    // Save externalId on the outbound message to prevent duplicates from polling
+    if (result.message_id) {
+      await this.messageModel.updateOne(
+        {
+          conversationId: new Types.ObjectId(conversationId),
+          direction: MessageDirection.OUTBOUND,
+          content,
+          'metadata.externalId': { $exists: false },
+        },
+        {
+          $set: {
+            'metadata.externalId': result.message_id,
+            'metadata.platform': isInstagram ? 'instagram' : 'facebook',
+            status: MessageStatus.DELIVERED,
+          },
+        },
+      ).sort({ createdAt: -1 }).limit(1);
+    }
+
     return true;
   }
 
@@ -2030,5 +2127,204 @@ export class FacebookService {
     const populated = await saved.populate('contactId');
     this.logger.log(`New Instagram comment conversation created: ${saved._id}`);
     return populated;
+  }
+
+  // ─── Instagram DM Polling ───
+
+  async syncInstagramMessages(tenantId: string): Promise<{ newConversations: number; newMessages: number }> {
+    const result = { newConversations: 0, newMessages: 0 };
+
+    // Get all connected Facebook pages (IG DMs are fetched via Page ID)
+    const fbAccounts = await this.socialAccountModel.find({
+      tenantId: new Types.ObjectId(tenantId),
+      platform: SocialPlatform.FACEBOOK,
+      status: SocialAccountStatus.CONNECTED,
+    }).exec();
+
+    for (const fbAccount of fbAccounts) {
+      if (!fbAccount.pageId || !fbAccount.accessToken) continue;
+
+      // Check if this page has Instagram linked
+      const igAccount = await this.socialAccountModel.findOne({
+        tenantId: new Types.ObjectId(tenantId),
+        platform: SocialPlatform.INSTAGRAM,
+        pageId: fbAccount.pageId,
+        status: SocialAccountStatus.CONNECTED,
+      });
+
+      if (!igAccount) continue;
+
+      this.logger.log(`[IG Sync] Polling Instagram DMs for page ${fbAccount.pageId} (IG: ${igAccount.accountId})`);
+
+      try {
+        // GET /{page-id}/conversations?platform=instagram
+        const convUrl = `${this.graphApiUrl}/${fbAccount.pageId}/conversations?platform=instagram&access_token=${fbAccount.accessToken}`;
+        const convResp = await fetch(convUrl);
+        const convData = await convResp.json() as any;
+
+        if (convData.error) {
+          this.logger.warn(`[IG Sync] Error fetching IG conversations for page ${fbAccount.pageId}: ${convData.error.message}`);
+          continue;
+        }
+
+        const conversations = convData.data || [];
+        this.logger.log(`[IG Sync] Found ${conversations.length} IG conversations for page ${fbAccount.pageId}`);
+
+        for (const conv of conversations) {
+          const convId = conv.id;
+          const participants = conv.participants?.data || [];
+          // The sender is the participant that's not our IG account
+          const sender = participants.find((p: any) => p.id !== igAccount.accountId);
+          const senderId = sender?.id || convId;
+          const senderName = sender?.name || `Instagram User ${senderId.slice(-4)}`;
+          const senderUsername = sender?.username;
+
+          // Get or create contact
+          let contact = await this.contactModel.findOne({
+            tenantId: new Types.ObjectId(tenantId),
+            'customFields.instagramPsid': senderId,
+          });
+
+          if (!contact) {
+            contact = new this.contactModel({
+              tenantId: new Types.ObjectId(tenantId),
+              name: senderUsername ? `@${senderUsername}` : senderName,
+              source: ContactSource.INSTAGRAM,
+              tags: ['instagram'],
+              customFields: { instagramPsid: senderId },
+            });
+            await contact.save();
+            result.newConversations++;
+          }
+
+          // Get or create conversation
+          let conversation = await this.conversationModel.findOne({
+            tenantId: new Types.ObjectId(tenantId),
+            channel: ConversationChannel.INSTAGRAM,
+            'metadata.externalId': senderId,
+            'metadata.accountId': igAccount.accountId,
+          });
+
+          if (!conversation) {
+            conversation = new this.conversationModel({
+              tenantId: new Types.ObjectId(tenantId),
+              contactId: contact._id,
+              channel: ConversationChannel.INSTAGRAM,
+              subject: 'Instagram DM',
+              status: ConversationStatus.OPEN,
+              metadata: {
+                externalId: senderId,
+                accountId: igAccount.accountId,
+                pageId: fbAccount.pageId,
+                pageName: igAccount.accountName,
+                conversationId: convId,
+              },
+            });
+            await conversation.save();
+            result.newConversations++;
+          }
+
+          // Fetch messages for this conversation
+          const msgUrl = `${this.graphApiUrl}/${convId}/messages?access_token=${fbAccount.accessToken}`;
+          const msgResp = await fetch(msgUrl);
+          const msgData = await msgResp.json() as any;
+
+          if (msgData.error) {
+            this.logger.warn(`[IG Sync] Error fetching messages for conv ${convId}: ${msgData.error.message}`);
+            continue;
+          }
+
+          const messages = msgData.data || [];
+          // Messages are in reverse chronological order, process oldest first
+          for (const msg of messages.reverse()) {
+            const msgId = msg.id;
+
+            // Check if message already exists by externalId
+            const existing = await this.messageModel.findOne({
+              tenantId: new Types.ObjectId(tenantId),
+              'metadata.externalId': msgId,
+            });
+            if (existing) continue;
+
+            // Fetch message details
+            const detailUrl = `${this.graphApiUrl}/${msgId}?fields=from,created_time,message,attachments&access_token=${fbAccount.accessToken}`;
+            const detailResp = await fetch(detailUrl);
+            const detail = await detailResp.json() as any;
+
+            if (detail.error) continue;
+
+            const isFromUs = detail.from?.id === igAccount.accountId;
+            let content = detail.message || '';
+            let type: any = 'text';
+            let media: any = undefined;
+
+            if (detail.attachments?.data?.length > 0) {
+              const att = detail.attachments.data[0];
+              if (att.image) { type = 'image'; media = { url: att.image, mimeType: 'image/jpeg' }; content = content || '[Imagen]'; }
+              else if (att.video) { type = 'video'; media = { url: att.video, mimeType: 'video/mp4' }; content = content || '[Video]'; }
+              else if (att.audio) { type = 'audio'; media = { url: att.audio, mimeType: 'audio/mpeg' }; content = content || '[Audio]'; }
+            }
+
+            // For outbound messages, check if we already sent it from Axentyc (no externalId yet)
+            if (isFromUs && content) {
+              const existingOutbound = await this.messageModel.findOne({
+                tenantId: new Types.ObjectId(tenantId),
+                conversationId: conversation._id,
+                direction: MessageDirection.OUTBOUND,
+                content,
+              });
+              if (existingOutbound) {
+                // Update the existing message with the externalId instead of creating duplicate
+                await this.messageModel.updateOne(
+                  { _id: existingOutbound._id },
+                  { $set: { 'metadata.externalId': msgId, 'metadata.platform': 'instagram' } },
+                );
+                continue;
+              }
+            }
+
+            const newMessage = new this.messageModel({
+              tenantId: new Types.ObjectId(tenantId),
+              conversationId: conversation._id,
+              direction: isFromUs ? MessageDirection.OUTBOUND : MessageDirection.INBOUND,
+              type,
+              content,
+              media,
+              senderName: isFromUs ? igAccount.accountName : (senderUsername ? `@${senderUsername}` : senderName),
+              status: MessageStatus.SENT,
+              metadata: {
+                externalId: msgId,
+                platform: 'instagram',
+              },
+            });
+            await newMessage.save();
+            result.newMessages++;
+
+            // Update conversation last message
+            await this.conversationModel.findByIdAndUpdate(conversation._id, {
+              lastMessage: content,
+              lastMessageAt: new Date(detail.created_time || Date.now()),
+              status: ConversationStatus.IN_PROGRESS,
+              $inc: { unreadCount: isFromUs ? 0 : 1 },
+            });
+          }
+
+          // Emit real-time event for the last new message
+          if (result.newMessages > 0) {
+            this.eventsGateway.emitMessageReceived(
+              tenantId,
+              conversation._id.toString(),
+              { content: conversation.lastMessage, direction: MessageDirection.INBOUND },
+              contact,
+            );
+          }
+        }
+      } catch (e: any) {
+        this.logger.error(`[IG Sync] Error syncing Instagram DMs for page ${fbAccount.pageId}: ${e.message}`);
+      }
+    }
+
+    this.logger.log(`[IG Sync] Completed: ${result.newConversations} new conversations, ${result.newMessages} new messages`);
+    return result;
   }
 }
