@@ -1359,12 +1359,30 @@ export class FacebookService {
     for (const entry of body.entry || []) {
       const pageId = entry.id;
 
-      // Handle messaging events (Messenger DMs)
+      // Check if this page is linked to an Instagram account
+      const igAccount = await this.socialAccountModel.findOne({
+        pageId,
+        platform: SocialPlatform.INSTAGRAM,
+        status: SocialAccountStatus.CONNECTED,
+      });
+
+      // Handle messaging events (Messenger DMs or Instagram DMs)
       for (const event of entry.messaging || []) {
         try {
           if (event.message && !event.message.is_echo) {
-            // Simple: all page webhooks are Messenger
-            await this.handleIncomingMessage(pageId, event, 'facebook');
+            // Instagram DMs come through page webhooks too
+            // Determine if this is Instagram or Messenger based on the account
+            if (igAccount) {
+              this.logger.log(`[Page Webhook] Routing as Instagram DM (page linked to IG account)`);
+              await this.handleIncomingMessage(igAccount.accountId || pageId, event, 'instagram');
+              // Trigger background sync for Instagram
+              this.syncInstagramMessages(igAccount.tenantId.toString()).catch((err) => {
+                this.logger.error(`[Page Webhook] Background IG sync failed: ${err.message}`);
+              });
+            } else {
+              // Regular Facebook Messenger
+              await this.handleIncomingMessage(pageId, event, 'facebook');
+            }
           } else if (event.message?.is_echo) {
             this.logger.debug('Received echo, skipping');
           } else if (event.read) {
