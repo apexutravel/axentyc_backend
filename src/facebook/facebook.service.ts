@@ -1359,7 +1359,7 @@ export class FacebookService {
     for (const entry of body.entry || []) {
       const pageId = entry.id;
 
-      // Check if this page is linked to an Instagram account
+      // Check if this page has an Instagram account linked
       const igAccount = await this.socialAccountModel.findOne({
         pageId,
         platform: SocialPlatform.INSTAGRAM,
@@ -1370,18 +1370,36 @@ export class FacebookService {
       for (const event of entry.messaging || []) {
         try {
           if (event.message && !event.message.is_echo) {
-            // Instagram DMs come through page webhooks too
-            // Determine if this is Instagram or Messenger based on the account
-            if (igAccount) {
-              this.logger.log(`[Page Webhook] Routing as Instagram DM (page linked to IG account)`);
-              await this.handleIncomingMessage(igAccount.accountId || pageId, event, 'instagram');
-              // Trigger background sync for Instagram
+            const recipientId = event.recipient?.id;
+            
+            // Determine channel by recipient.id:
+            // - If recipient.id === pageId → Facebook Messenger
+            // - If recipient.id === instagramBusinessAccountId → Instagram DM
+            let platform: 'facebook' | 'instagram' = 'facebook';
+            let accountId = pageId;
+            
+            if (igAccount && recipientId === igAccount.accountId) {
+              // Instagram DM (recipient is the Instagram Business Account ID)
+              platform = 'instagram';
+              accountId = igAccount.accountId;
+              this.logger.log(`[Page Webhook] Detected Instagram DM (recipient: ${recipientId})`);
+            } else if (recipientId === pageId) {
+              // Facebook Messenger (recipient is the Page ID)
+              platform = 'facebook';
+              accountId = pageId;
+              this.logger.log(`[Page Webhook] Detected Facebook Messenger (recipient: ${recipientId})`);
+            } else {
+              // Fallback: if recipient doesn't match, assume Messenger
+              this.logger.warn(`[Page Webhook] Unknown recipient: ${recipientId}, defaulting to Messenger`);
+            }
+            
+            await this.handleIncomingMessage(accountId, event, platform);
+            
+            // Trigger background sync for Instagram
+            if (platform === 'instagram' && igAccount) {
               this.syncInstagramMessages(igAccount.tenantId.toString()).catch((err) => {
                 this.logger.error(`[Page Webhook] Background IG sync failed: ${err.message}`);
               });
-            } else {
-              // Regular Facebook Messenger
-              await this.handleIncomingMessage(pageId, event, 'facebook');
             }
           } else if (event.message?.is_echo) {
             this.logger.debug('Received echo, skipping');
