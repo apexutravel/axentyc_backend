@@ -68,6 +68,7 @@ export class Conversation {
     postId?: string;
     mediaId?: string;
     platform?: string;
+    conversationId?: string;
     visitorData?: {
       name?: string;
       email?: string;

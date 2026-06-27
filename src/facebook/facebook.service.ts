@@ -2156,7 +2156,7 @@ export class FacebookService {
     return populated;
   }
 
-  // ─── Instagram DM Polling ───
+  // ─── Instagram DM Import / Manual Sync ───
 
   async syncInstagramMessages(tenantId: string): Promise<{ newConversations: number; newMessages: number }> {
     const result = { newConversations: 0, newMessages: 0 };
@@ -2206,31 +2206,34 @@ export class FacebookService {
           const senderName = sender?.name || `Instagram User ${senderId.slice(-4)}`;
           const senderUsername = sender?.username;
 
-          // Get or create contact
-          let contact = await this.contactModel.findOne({
-            tenantId: new Types.ObjectId(tenantId),
-            'customFields.instagramPsid': senderId,
-          });
+          // Get or create contact (same helper as webhook)
+          const contact = await this.getOrCreateContact(tenantId, senderId, fbAccount.accessToken, 'instagram');
 
-          if (!contact) {
-            contact = new this.contactModel({
-              tenantId: new Types.ObjectId(tenantId),
-              name: senderUsername ? `@${senderUsername}` : senderName,
-              source: ContactSource.INSTAGRAM,
-              tags: ['instagram'],
-              customFields: { instagramPsid: senderId },
-            });
-            await contact.save();
-            result.newConversations++;
-          }
-
-          // Get or create conversation
+          // Get or create conversation — search by Graph API conversation ID (stable, never changes)
+          // This prevents duplicates that happened when searching by externalId (which gets updated)
           let conversation = await this.conversationModel.findOne({
             tenantId: new Types.ObjectId(tenantId),
             channel: ConversationChannel.INSTAGRAM,
-            'metadata.externalId': senderId,
-            'metadata.accountId': igAccount.accountId,
+            'metadata.conversationId': convId,
           });
+
+          if (!conversation) {
+            // Fallback: search by externalId (for conversations created by webhook before we stored conversationId)
+            conversation = await this.conversationModel.findOne({
+              tenantId: new Types.ObjectId(tenantId),
+              channel: ConversationChannel.INSTAGRAM,
+              'metadata.externalId': senderId,
+            });
+          }
+
+          if (!conversation) {
+            // Fallback: search by contactId (webhook may have used a different externalId)
+            conversation = await this.conversationModel.findOne({
+              tenantId: new Types.ObjectId(tenantId),
+              channel: ConversationChannel.INSTAGRAM,
+              contactId: contact._id,
+            });
+          }
 
           if (!conversation) {
             conversation = new this.conversationModel({
@@ -2249,6 +2252,16 @@ export class FacebookService {
             });
             await conversation.save();
             result.newConversations++;
+          }
+
+          // Ensure conversation has the Graph API conversationId stored (for future lookups)
+          if (!conversation.metadata?.conversationId) {
+            await this.conversationModel.updateOne(
+              { _id: conversation._id },
+              { $set: { 'metadata.conversationId': convId } },
+            );
+            conversation.metadata = conversation.metadata || {};
+            conversation.metadata.conversationId = convId;
           }
 
           // Fetch messages for this conversation
@@ -2275,26 +2288,15 @@ export class FacebookService {
 
             const isFromUs = detail.from?.id === igAccount.accountId;
 
-            // For inbound messages, update conversation externalId with the sender's IGSID from message details
-            // This is the correct ID needed for the Send API (may differ from participants API ID)
-            if (!isFromUs && detail.from?.id) {
-              const currentExternalId = conversation.metadata?.externalId;
-              if (detail.from.id !== currentExternalId) {
-                this.logger.log(`[IG Sync] Updating conversation externalId from ${currentExternalId} to ${detail.from.id} (IGSID from message)`);
-                await this.conversationModel.updateOne(
-                  { _id: conversation._id },
-                  { $set: { 'metadata.externalId': detail.from.id } },
-                );
-                conversation.metadata = conversation.metadata || {};
-                conversation.metadata.externalId = detail.from.id;
-                // Also update contact's instagramPsid if different
-                if (contact.customFields?.instagramPsid !== detail.from.id) {
-                  await this.contactModel.updateOne(
-                    { _id: contact._id },
-                    { $set: { 'customFields.instagramPsid': detail.from.id } },
-                  );
-                }
-              }
+            // For inbound messages, only set externalId if it's missing (don't overwrite webhook-set value)
+            if (!isFromUs && detail.from?.id && !conversation.metadata?.externalId) {
+              this.logger.log(`[IG Sync] Setting conversation externalId to ${detail.from.id} (IGSID from message)`);
+              await this.conversationModel.updateOne(
+                { _id: conversation._id },
+                { $set: { 'metadata.externalId': detail.from.id } },
+              );
+              conversation.metadata = conversation.metadata || {};
+              conversation.metadata.externalId = detail.from.id;
             }
 
             // Now check if message already exists by externalId
