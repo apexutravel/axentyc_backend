@@ -1363,44 +1363,26 @@ export class FacebookService {
       for (const event of entry.messaging || []) {
         try {
           if (event.message && !event.message.is_echo) {
-            // Decide whether this messaging event is from Facebook Messenger or Instagram DM.
-            // Heuristic: try to fetch sender profile using the Page token. If it succeeds (has first_name), it's Messenger; otherwise it's Instagram.
-            const fbAccount = await this.socialAccountModel.findOne({
-              pageId,
-              platform: SocialPlatform.FACEBOOK,
-              status: SocialAccountStatus.CONNECTED,
-            });
-
-            let routePlatform: 'facebook' | 'instagram' = 'facebook';
-            if (fbAccount?.accessToken) {
-              try {
-                const probeUrl = `${this.graphApiUrl}/${event.sender?.id}?fields=first_name&access_token=${fbAccount.accessToken}`;
-                const probeResp = await fetch(probeUrl);
-                const probe = await probeResp.json() as any;
-                if (!probe?.first_name) {
-                  // Not a Messenger PSID; likely an Instagram sender id
-                  routePlatform = 'instagram';
-                }
-              } catch {
-                routePlatform = 'instagram';
-              }
-            }
-
-            if (routePlatform === 'facebook') {
-              await this.handleIncomingMessage(pageId, event, 'facebook');
-            } else {
-              // Find linked Instagram account by pageId to pass a helpful accountId parameter
+            // Determine product explicitly from payload
+            const product = event.messaging_product || event.message?.messaging_product;
+            if (product === 'instagram') {
+              // Route as Instagram DM using linked IG account if available
               const igAccount = await this.socialAccountModel.findOne({
                 pageId,
                 platform: SocialPlatform.INSTAGRAM,
                 status: SocialAccountStatus.CONNECTED,
               });
-              if (fbAccount?.tenantId) {
-                await this.syncInstagramMessages(fbAccount.tenantId.toString());
-              } else {
-                const igLookup = igAccount?.accountId || pageId;
-                await this.handleIncomingMessage(igLookup, event, 'instagram');
+              const igLookup = igAccount?.accountId || pageId;
+              await this.handleIncomingMessage(igLookup, event, 'instagram');
+              // Additionally, run a background sync to fetch authoritative thread state
+              if (igAccount?.tenantId) {
+                this.syncInstagramMessages(igAccount.tenantId.toString()).catch(() => {
+                  /* ignore */
+                });
               }
+            } else {
+              // Default to Facebook Messenger
+              await this.handleIncomingMessage(pageId, event, 'facebook');
             }
           } else if (event.message?.is_echo) {
             this.logger.debug('Received echo, skipping');
@@ -1598,6 +1580,8 @@ export class FacebookService {
       status: ConversationStatus.IN_PROGRESS,
       $inc: { unreadCount: isBeingViewed ? 0 : 1 },
     });
+    // Notify conversation list update for UI refresh
+    this.eventsGateway.emitConversationUpdated(tenantId, { _id: conversation._id });
 
     // Emit real-time events
     this.eventsGateway.emitMessageReceived(
@@ -2441,6 +2425,8 @@ export class FacebookService {
               status: ConversationStatus.IN_PROGRESS,
               $inc: { unreadCount: isFromUs ? 0 : (isBeingViewed ? 0 : 1) },
             });
+            // Notify conversation list update for UI refresh
+            this.eventsGateway.emitConversationUpdated(tenantId, { _id: conversation._id });
 
             // Emit real-time events (same as handleIncomingMessage)
             this.eventsGateway.emitMessageReceived(
