@@ -1363,27 +1363,8 @@ export class FacebookService {
       for (const event of entry.messaging || []) {
         try {
           if (event.message && !event.message.is_echo) {
-            // Determine product explicitly from payload
-            const product = event.messaging_product || event.message?.messaging_product;
-            if (product === 'instagram') {
-              // Route as Instagram DM using linked IG account if available
-              const igAccount = await this.socialAccountModel.findOne({
-                pageId,
-                platform: SocialPlatform.INSTAGRAM,
-                status: SocialAccountStatus.CONNECTED,
-              });
-              const igLookup = igAccount?.accountId || pageId;
-              await this.handleIncomingMessage(igLookup, event, 'instagram');
-              // Additionally, run a background sync to fetch authoritative thread state
-              if (igAccount?.tenantId) {
-                this.syncInstagramMessages(igAccount.tenantId.toString()).catch(() => {
-                  /* ignore */
-                });
-              }
-            } else {
-              // Default to Facebook Messenger
-              await this.handleIncomingMessage(pageId, event, 'facebook');
-            }
+            // Simple: all page webhooks are Messenger
+            await this.handleIncomingMessage(pageId, event, 'facebook');
           } else if (event.message?.is_echo) {
             this.logger.debug('Received echo, skipping');
           } else if (event.read) {
@@ -2146,7 +2127,7 @@ export class FacebookService {
     
     // Populate contactId and emit event to notify frontend
     const populatedConversation = await savedConversation.populate('contactId');
-    this.eventsGateway.emitToTenant(tenantId, 'conversation.created', populatedConversation);
+    this.eventsGateway.emitToTenant(tenantId, 'conversation.created', populatedConversation.toObject());
     this.logger.log(`New ${platform} conversation created: ${savedConversation._id}`);
     
     return savedConversation;
