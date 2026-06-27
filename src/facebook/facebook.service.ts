@@ -1521,6 +1521,7 @@ export class FacebookService {
       },
     });
     const savedMessage = await newMessage.save();
+    const messageObj = savedMessage.toObject();
 
     // Update conversation
     const isBeingViewed = this.eventsGateway.isConversationBeingViewed(conversation._id.toString());
@@ -1535,14 +1536,14 @@ export class FacebookService {
     this.eventsGateway.emitMessageReceived(
       tenantId,
       conversation._id.toString(),
-      savedMessage,
+      messageObj,
       contact,
     );
 
     this.eventsGateway.emitToConversation(
       conversation._id.toString(),
       'message.new',
-      savedMessage,
+      messageObj,
     );
   }
 
