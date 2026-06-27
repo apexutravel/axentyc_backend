@@ -417,4 +417,11 @@ export class FacebookController {
     const result = await this.facebookService.syncInstagramMessages(user.tenantId);
     return { success: true, ...result };
   }
+
+  @Post('integrations/instagram/resubscribe-webhook')
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Re-subscribe Instagram account to webhooks' })
+  async resubscribeInstagramWebhook(@CurrentUser() user: any) {
+    return this.facebookService.resubscribeInstagramWebhook(user.tenantId);
+  }
 }

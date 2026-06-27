@@ -112,18 +112,6 @@ export class FacebookService {
       if (totalSynced > 0) {
         this.logger.log(`[Auto-Sync] Completed: ${totalSynced} new comments synced`);
       }
-
-      // Also sync Instagram DMs for each tenant
-      for (const [tenantId] of tenantMap) {
-        try {
-          const igResult = await this.syncInstagramMessages(tenantId);
-          if (igResult.newMessages > 0) {
-            this.logger.log(`[Auto-Sync] Synced ${igResult.newMessages} new IG DMs for tenant ${tenantId}`);
-          }
-        } catch (e: any) {
-          this.logger.error(`[Auto-Sync] Error syncing IG DMs for tenant ${tenantId}: ${e.message}`);
-        }
-      }
     } catch (e: any) {
       this.logger.error(`[Auto-Sync] Fatal error: ${e.message}`);
     }
@@ -1251,6 +1239,45 @@ export class FacebookService {
     return { success: true, results };
   }
 
+  async resubscribeInstagramWebhook(tenantId: string): Promise<any> {
+    const igAccounts = await this.socialAccountModel.find({
+      tenantId: new Types.ObjectId(tenantId),
+      platform: SocialPlatform.INSTAGRAM,
+      status: SocialAccountStatus.CONNECTED,
+    });
+
+    if (igAccounts.length === 0) {
+      return { success: false, message: 'No connected Instagram accounts found' };
+    }
+
+    const results: any[] = [];
+    for (const ig of igAccounts) {
+      try {
+        // Get the linked Facebook page's access token
+        const fbAccount = await this.socialAccountModel.findOne({
+          tenantId: new Types.ObjectId(tenantId),
+          platform: SocialPlatform.FACEBOOK,
+          pageId: ig.pageId,
+          status: SocialAccountStatus.CONNECTED,
+        });
+
+        if (!fbAccount?.accessToken) {
+          results.push({ igId: ig.accountId, name: ig.accountName, status: 'error', error: 'No Facebook page token found' });
+          continue;
+        }
+
+        await this.subscribeInstagramToWebhook(ig.accountId!, fbAccount.accessToken);
+        results.push({ igId: ig.accountId, name: ig.accountName, status: 'subscribed' });
+        this.logger.log(`Re-subscribed Instagram account ${ig.accountName} (${ig.accountId}) to webhooks`);
+      } catch (err: any) {
+        results.push({ igId: ig.accountId, name: ig.accountName, status: 'error', error: err.message });
+        this.logger.error(`Failed to re-subscribe Instagram ${ig.accountId}:`, err);
+      }
+    }
+
+    return { success: true, results };
+  }
+
   private async subscribePageToWebhook(pageId: string, pageAccessToken: string): Promise<void> {
     const url = `${this.graphApiUrl}/${pageId}/subscribed_apps`;
     const response = await fetch(url, {
@@ -2239,14 +2266,7 @@ export class FacebookService {
           for (const msg of messages.reverse()) {
             const msgId = msg.id;
 
-            // Check if message already exists by externalId
-            const existing = await this.messageModel.findOne({
-              tenantId: new Types.ObjectId(tenantId),
-              'metadata.externalId': msgId,
-            });
-            if (existing) continue;
-
-            // Fetch message details
+            // Fetch message details first (needed for from.id = IGSID)
             const detailUrl = `${this.graphApiUrl}/${msgId}?fields=from,created_time,message,attachments&access_token=${fbAccount.accessToken}`;
             const detailResp = await fetch(detailUrl);
             const detail = await detailResp.json() as any;
@@ -2254,6 +2274,36 @@ export class FacebookService {
             if (detail.error) continue;
 
             const isFromUs = detail.from?.id === igAccount.accountId;
+
+            // For inbound messages, update conversation externalId with the sender's IGSID from message details
+            // This is the correct ID needed for the Send API (may differ from participants API ID)
+            if (!isFromUs && detail.from?.id) {
+              const currentExternalId = conversation.metadata?.externalId;
+              if (detail.from.id !== currentExternalId) {
+                this.logger.log(`[IG Sync] Updating conversation externalId from ${currentExternalId} to ${detail.from.id} (IGSID from message)`);
+                await this.conversationModel.updateOne(
+                  { _id: conversation._id },
+                  { $set: { 'metadata.externalId': detail.from.id } },
+                );
+                conversation.metadata = conversation.metadata || {};
+                conversation.metadata.externalId = detail.from.id;
+                // Also update contact's instagramPsid if different
+                if (contact.customFields?.instagramPsid !== detail.from.id) {
+                  await this.contactModel.updateOne(
+                    { _id: contact._id },
+                    { $set: { 'customFields.instagramPsid': detail.from.id } },
+                  );
+                }
+              }
+            }
+
+            // Now check if message already exists by externalId
+            const existing = await this.messageModel.findOne({
+              tenantId: new Types.ObjectId(tenantId),
+              'metadata.externalId': msgId,
+            });
+            if (existing) continue;
+
             let content = detail.message || '';
             let type: any = 'text';
             let media: any = undefined;
@@ -2297,25 +2347,30 @@ export class FacebookService {
                 platform: 'instagram',
               },
             });
-            await newMessage.save();
+            const savedMessage = await newMessage.save();
+            const messageObj = savedMessage.toObject();
             result.newMessages++;
 
             // Update conversation last message
+            const isBeingViewed = this.eventsGateway.isConversationBeingViewed(conversation._id.toString());
             await this.conversationModel.findByIdAndUpdate(conversation._id, {
               lastMessage: content,
               lastMessageAt: new Date(detail.created_time || Date.now()),
               status: ConversationStatus.IN_PROGRESS,
-              $inc: { unreadCount: isFromUs ? 0 : 1 },
+              $inc: { unreadCount: isFromUs ? 0 : (isBeingViewed ? 0 : 1) },
             });
-          }
 
-          // Emit real-time event for the last new message
-          if (result.newMessages > 0) {
+            // Emit real-time events (same as handleIncomingMessage)
             this.eventsGateway.emitMessageReceived(
               tenantId,
               conversation._id.toString(),
-              { content: conversation.lastMessage, direction: MessageDirection.INBOUND },
+              messageObj,
               contact,
+            );
+            this.eventsGateway.emitToConversation(
+              conversation._id.toString(),
+              'message.new',
+              messageObj,
             );
           }
         }
