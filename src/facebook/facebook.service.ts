@@ -1416,22 +1416,42 @@ export class FacebookService {
   }
 
   private async handleInstagramWebhook(body: any): Promise<void> {
+    this.logger.log(`[IG Webhook] Processing Instagram webhook with ${body.entry?.length || 0} entries`);
     for (const entry of body.entry || []) {
       const igAccountId = entry.id;
+      this.logger.log(`[IG Webhook] Entry ID: ${igAccountId}, messaging events: ${entry.messaging?.length || 0}`);
 
       // Handle messaging events (Instagram DMs)
       for (const event of entry.messaging || []) {
         try {
           if (event.message && !event.message.is_echo) {
+            this.logger.log(`[IG Webhook] Incoming IG message from ${event.sender?.id} to ${event.recipient?.id}`);
+            this.logger.debug(`[IG Webhook] Event payload: ${JSON.stringify(event)}`);
+            
             const igAccount = await this.socialAccountModel.findOne({
               accountId: igAccountId,
               platform: SocialPlatform.INSTAGRAM,
               status: SocialAccountStatus.CONNECTED,
             });
+            
+            if (!igAccount) {
+              this.logger.warn(`[IG Webhook] No connected IG account found for accountId: ${igAccountId}`);
+              // List all IG accounts to help diagnose
+              const allIgAccounts = await this.socialAccountModel.find({
+                platform: SocialPlatform.INSTAGRAM,
+                status: SocialAccountStatus.CONNECTED,
+              }).select('accountId pageId accountName tenantId');
+              this.logger.debug(`[IG Webhook] Connected IG accounts: ${JSON.stringify(allIgAccounts)}`);
+            }
+            
+            // Process message immediately for real-time response
+            await this.handleIncomingMessage(igAccountId, event, 'instagram');
+            
+            // Also trigger background sync to ensure thread state is authoritative
             if (igAccount?.tenantId) {
-              await this.syncInstagramMessages(igAccount.tenantId.toString());
-            } else {
-              await this.handleIncomingMessage(igAccountId, event, 'instagram');
+              this.syncInstagramMessages(igAccount.tenantId.toString()).catch((err) => {
+                this.logger.error(`[IG Webhook] Background sync failed: ${err.message}`);
+              });
             }
           } else if (event.read) {
             await this.handleMessageRead(igAccountId, event);
@@ -1574,14 +1594,20 @@ export class FacebookService {
 
     // Update conversation
     const isBeingViewed = this.eventsGateway.isConversationBeingViewed(conversation._id.toString());
-    await this.conversationModel.findByIdAndUpdate(conversation._id, {
-      lastMessage: content,
-      lastMessageAt: new Date(),
-      status: ConversationStatus.IN_PROGRESS,
-      $inc: { unreadCount: isBeingViewed ? 0 : 1 },
-    });
+    const updatedConv = await this.conversationModel.findByIdAndUpdate(
+      conversation._id,
+      {
+        lastMessage: content,
+        lastMessageAt: new Date(),
+        status: ConversationStatus.IN_PROGRESS,
+        $inc: { unreadCount: isBeingViewed ? 0 : 1 },
+      },
+      { new: true }
+    ).populate('contactId').lean();
     // Notify conversation list update for UI refresh
-    this.eventsGateway.emitConversationUpdated(tenantId, { _id: conversation._id });
+    if (updatedConv) {
+      this.eventsGateway.emitConversationUpdated(tenantId, updatedConv);
+    }
 
     // Emit real-time events
     this.eventsGateway.emitMessageReceived(
@@ -2419,14 +2445,20 @@ export class FacebookService {
 
             // Update conversation last message
             const isBeingViewed = this.eventsGateway.isConversationBeingViewed(conversation._id.toString());
-            await this.conversationModel.findByIdAndUpdate(conversation._id, {
-              lastMessage: content,
-              lastMessageAt: new Date(detail.created_time || Date.now()),
-              status: ConversationStatus.IN_PROGRESS,
-              $inc: { unreadCount: isFromUs ? 0 : (isBeingViewed ? 0 : 1) },
-            });
+            const updatedConv = await this.conversationModel.findByIdAndUpdate(
+              conversation._id,
+              {
+                lastMessage: content,
+                lastMessageAt: new Date(detail.created_time || Date.now()),
+                status: ConversationStatus.IN_PROGRESS,
+                $inc: { unreadCount: isFromUs ? 0 : (isBeingViewed ? 0 : 1) },
+              },
+              { new: true }
+            ).populate('contactId').lean();
             // Notify conversation list update for UI refresh
-            this.eventsGateway.emitConversationUpdated(tenantId, { _id: conversation._id });
+            if (updatedConv) {
+              this.eventsGateway.emitConversationUpdated(tenantId, updatedConv);
+            }
 
             // Emit real-time events (same as handleIncomingMessage)
             this.eventsGateway.emitMessageReceived(
