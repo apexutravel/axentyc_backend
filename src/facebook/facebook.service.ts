@@ -1363,7 +1363,41 @@ export class FacebookService {
       for (const event of entry.messaging || []) {
         try {
           if (event.message && !event.message.is_echo) {
-            await this.handleIncomingMessage(pageId, event, 'facebook');
+            // Decide whether this messaging event is from Facebook Messenger or Instagram DM.
+            // Heuristic: try to fetch sender profile using the Page token. If it succeeds (has first_name), it's Messenger; otherwise it's Instagram.
+            const fbAccount = await this.socialAccountModel.findOne({
+              pageId,
+              platform: SocialPlatform.FACEBOOK,
+              status: SocialAccountStatus.CONNECTED,
+            });
+
+            let routePlatform: 'facebook' | 'instagram' = 'facebook';
+            if (fbAccount?.accessToken) {
+              try {
+                const probeUrl = `${this.graphApiUrl}/${event.sender?.id}?fields=first_name&access_token=${fbAccount.accessToken}`;
+                const probeResp = await fetch(probeUrl);
+                const probe = await probeResp.json() as any;
+                if (!probe?.first_name) {
+                  // Not a Messenger PSID; likely an Instagram sender id
+                  routePlatform = 'instagram';
+                }
+              } catch {
+                routePlatform = 'instagram';
+              }
+            }
+
+            if (routePlatform === 'facebook') {
+              await this.handleIncomingMessage(pageId, event, 'facebook');
+            } else {
+              // Find linked Instagram account by pageId to pass a helpful accountId parameter
+              const igAccount = await this.socialAccountModel.findOne({
+                pageId,
+                platform: SocialPlatform.INSTAGRAM,
+                status: SocialAccountStatus.CONNECTED,
+              });
+              const igLookup = igAccount?.accountId || pageId;
+              await this.handleIncomingMessage(igLookup, event, 'instagram');
+            }
           } else if (event.message?.is_echo) {
             this.logger.debug('Received echo, skipping');
           } else if (event.read) {
@@ -1434,22 +1468,42 @@ export class FacebookService {
     if (!senderId || !message) return;
 
     this.logger.log(`Incoming ${platform} message from ${senderId} to account ${accountId}`);
-    this.logger.debug(`Event details - senderId: ${senderId}, recipientId: ${recipientId}, accountId: ${accountId}`);
+    this.logger.debug(`Event details - senderId: ${senderId}, recipientId: ${recipientId}, paramAccountId: ${accountId}`);
 
     // Find the social account (Facebook page or Instagram account)
-    const lookupId = recipientId || accountId;
-    this.logger.debug(`Looking for ${platform} account with pageId/accountId: ${lookupId}`);
-    
-    const account = await this.socialAccountModel.findOne({
-      $or: [
-        { pageId: lookupId, platform: platform === 'facebook' ? SocialPlatform.FACEBOOK : SocialPlatform.INSTAGRAM },
-        { accountId: lookupId, platform: platform === 'facebook' ? SocialPlatform.FACEBOOK : SocialPlatform.INSTAGRAM },
-      ],
-      status: SocialAccountStatus.CONNECTED,
-    });
+    // For Facebook, recipientId is the Page ID. For Instagram, recipientId can vary by payload version.
+    // Make the lookup robust by trying multiple combinations when platform is Instagram.
+    let account = null as any;
+    if (platform === 'facebook') {
+      const lookupId = recipientId || accountId;
+      this.logger.debug(`Looking for facebook account with pageId/accountId: ${lookupId}`);
+      account = await this.socialAccountModel.findOne({
+        $or: [
+          { pageId: lookupId, platform: SocialPlatform.FACEBOOK },
+          { accountId: lookupId, platform: SocialPlatform.FACEBOOK },
+        ],
+        status: SocialAccountStatus.CONNECTED,
+      });
+    } else {
+      // instagram: try recipientId as pageId/accountId and also the function param accountId as accountId/pageId
+      const ors: any[] = [];
+      if (recipientId) {
+        ors.push({ pageId: recipientId, platform: SocialPlatform.INSTAGRAM });
+        ors.push({ accountId: recipientId, platform: SocialPlatform.INSTAGRAM });
+      }
+      if (accountId) {
+        ors.push({ accountId: accountId, platform: SocialPlatform.INSTAGRAM });
+        ors.push({ pageId: accountId, platform: SocialPlatform.INSTAGRAM });
+      }
+      this.logger.debug(`Looking for instagram account with any of: ${JSON.stringify(ors.map(o => ({ pageId: o.pageId, accountId: o.accountId })))}`);
+      account = await this.socialAccountModel.findOne({
+        $or: ors,
+        status: SocialAccountStatus.CONNECTED,
+      });
+    }
 
     if (!account) {
-      this.logger.warn(`No connected ${platform} account found for lookupId: ${lookupId} (recipientId: ${recipientId}, accountId: ${accountId})`);
+      this.logger.warn(`No connected ${platform} account found (recipientId: ${recipientId}, paramAccountId: ${accountId})`);
       
       // Debug: List all connected accounts for this platform
       const allAccounts = await this.socialAccountModel.find({
