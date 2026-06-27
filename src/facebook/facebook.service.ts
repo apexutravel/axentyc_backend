@@ -997,11 +997,6 @@ export class FacebookService {
         { upsert: true, new: true },
       );
       this.logger.log(`Instagram account @${instagramAccount.username} connected for tenant ${tenantId}`);
-
-      // Sync existing Instagram DMs immediately
-      this.syncInstagramMessages(tenantId).catch((e) => {
-        this.logger.warn(`Initial IG DM sync failed for tenant ${tenantId}: ${e.message}`);
-      });
     }
 
     this.logger.log(`Facebook page "${pageName}" (${pageId}) connected for tenant ${tenantId}`);
@@ -1394,13 +1389,6 @@ export class FacebookService {
             }
             
             await this.handleIncomingMessage(accountId, event, platform);
-            
-            // Trigger background sync for Instagram
-            if (platform === 'instagram' && igAccount) {
-              this.syncInstagramMessages(igAccount.tenantId.toString()).catch((err) => {
-                this.logger.error(`[Page Webhook] Background IG sync failed: ${err.message}`);
-              });
-            }
           } else if (event.message?.is_echo) {
             this.logger.debug('Received echo, skipping');
           } else if (event.read) {
@@ -1472,11 +1460,6 @@ export class FacebookService {
             // Process message immediately for real-time response
             // Use the IG accountId for lookup (not pageId)
             await this.handleIncomingMessage(igAccount.accountId || igAccountId, event, 'instagram');
-            
-            // Also trigger background sync to ensure thread state is authoritative
-            this.syncInstagramMessages(igAccount.tenantId.toString()).catch((err) => {
-              this.logger.error(`[IG Webhook] Background sync failed: ${err.message}`);
-            });
           } else if (event.read) {
             await this.handleMessageRead(igAccountId, event);
           }
@@ -2136,10 +2119,12 @@ export class FacebookService {
     const channel = platform === 'instagram' ? ConversationChannel.INSTAGRAM : ConversationChannel.FACEBOOK;
     
     // Try to find existing conversation by externalId (Facebook PSID)
+    // IMPORTANT: Exclude comment conversations (isComment: true)
     const existing = await this.conversationModel.findOne({
       tenantId: new Types.ObjectId(tenantId),
       channel,
       'metadata.externalId': senderId,
+      'metadata.isComment': { $ne: true },  // Exclude comments
       $or: [
         { 'metadata.pageId': accountId },
         { 'metadata.accountId': accountId },
