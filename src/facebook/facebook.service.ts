@@ -1409,31 +1409,38 @@ export class FacebookService {
             this.logger.log(`[IG Webhook] Incoming IG message from ${event.sender?.id} to ${event.recipient?.id}`);
             this.logger.debug(`[IG Webhook] Event payload: ${JSON.stringify(event)}`);
             
+            // Instagram messages are sent via the linked Facebook Page
+            // Try to find IG account by accountId or pageId
             const igAccount = await this.socialAccountModel.findOne({
-              accountId: igAccountId,
-              platform: SocialPlatform.INSTAGRAM,
+              $or: [
+                { accountId: igAccountId, platform: SocialPlatform.INSTAGRAM },
+                { pageId: igAccountId, platform: SocialPlatform.INSTAGRAM },
+              ],
               status: SocialAccountStatus.CONNECTED,
             });
             
             if (!igAccount) {
-              this.logger.warn(`[IG Webhook] No connected IG account found for accountId: ${igAccountId}`);
+              this.logger.warn(`[IG Webhook] No connected IG account found for ID: ${igAccountId}`);
               // List all IG accounts to help diagnose
               const allIgAccounts = await this.socialAccountModel.find({
                 platform: SocialPlatform.INSTAGRAM,
                 status: SocialAccountStatus.CONNECTED,
               }).select('accountId pageId accountName tenantId');
               this.logger.debug(`[IG Webhook] Connected IG accounts: ${JSON.stringify(allIgAccounts)}`);
+              this.logger.error(`[IG Webhook] Cannot process message without connected account. Skipping.`);
+              continue;
             }
+            
+            this.logger.log(`[IG Webhook] Found IG account: ${igAccount.accountName} (tenant: ${igAccount.tenantId})`);
             
             // Process message immediately for real-time response
-            await this.handleIncomingMessage(igAccountId, event, 'instagram');
+            // Use the IG accountId for lookup (not pageId)
+            await this.handleIncomingMessage(igAccount.accountId || igAccountId, event, 'instagram');
             
             // Also trigger background sync to ensure thread state is authoritative
-            if (igAccount?.tenantId) {
-              this.syncInstagramMessages(igAccount.tenantId.toString()).catch((err) => {
-                this.logger.error(`[IG Webhook] Background sync failed: ${err.message}`);
-              });
-            }
+            this.syncInstagramMessages(igAccount.tenantId.toString()).catch((err) => {
+              this.logger.error(`[IG Webhook] Background sync failed: ${err.message}`);
+            });
           } else if (event.read) {
             await this.handleMessageRead(igAccountId, event);
           }
@@ -1511,11 +1518,15 @@ export class FacebookService {
     }
 
     const tenantId = account.tenantId.toString();
+    this.logger.log(`[handleIncomingMessage] Processing for tenant: ${tenantId}`);
 
     // Get or create contact
+    this.logger.debug(`[handleIncomingMessage] Getting/creating contact for senderId: ${senderId}`);
     const contact = await this.getOrCreateContact(tenantId, senderId, account.accessToken, platform);
+    this.logger.log(`[handleIncomingMessage] Contact: ${contact._id} (${contact.name})`);
 
     // Get or create conversation
+    this.logger.debug(`[handleIncomingMessage] Getting/creating conversation`);
     const conversation = await this.getOrCreateConversation(
       tenantId,
       contact._id.toString(),
@@ -1524,6 +1535,7 @@ export class FacebookService {
       platform,
       account.accountName,
     );
+    this.logger.log(`[handleIncomingMessage] Conversation: ${conversation._id} (new: ${conversation.isNew !== false})`);
 
     // Determine message type and content
     let content = message.text || '';
@@ -2124,11 +2136,14 @@ export class FacebookService {
       metadata,
     });
     const savedConversation = await newConversation.save();
+    this.logger.log(`✅ New ${platform} conversation created: ${savedConversation._id}`);
     
     // Populate contactId and emit event to notify frontend
     const populatedConversation = await savedConversation.populate('contactId');
-    this.eventsGateway.emitToTenant(tenantId, 'conversation.created', populatedConversation.toObject());
-    this.logger.log(`New ${platform} conversation created: ${savedConversation._id}`);
+    const conversationObj = populatedConversation.toObject();
+    this.logger.log(`[getOrCreateConversation] Emitting conversation.created to tenant:${tenantId}`);
+    this.logger.debug(`[getOrCreateConversation] Conversation data: ${JSON.stringify({ _id: conversationObj._id, channel: conversationObj.channel, contactName: (conversationObj.contactId as any)?.name })}`);
+    this.eventsGateway.emitToTenant(tenantId, 'conversation.created', conversationObj);
     
     return savedConversation;
   }
