@@ -347,14 +347,61 @@ export class ConversationsService {
   }
 
   async remove(tenantId: string, id: string): Promise<void> {
-    const conversation = await this.conversationModel
-      .findOneAndDelete({ _id: id, tenantId: new Types.ObjectId(tenantId) })
-      .exec();
-    if (!conversation) {
+    // First, find the conversation to capture metadata for duplicate cleanup
+    const found = await this.conversationModel
+      .findOne({ _id: id, tenantId: new Types.ObjectId(tenantId) })
+      .lean();
+
+    if (!found) {
       throw new NotFoundException(`Conversation with ID ${id} not found`);
     }
+
+    // Build a filter to delete ALL conversations for the same participant (PSID) and channel
+    // scoped to the same page/account, to ensure a fresh thread is created on next message.
+    const externalId = (found as any)?.metadata?.externalId as string | undefined;
+    const pageId = (found as any)?.metadata?.pageId as string | undefined;
+    const accountId = (found as any)?.metadata?.accountId as string | undefined;
+    const channel = (found as any)?.channel as string | undefined;
+
+    const baseFilter: any = {
+      tenantId: new Types.ObjectId(tenantId),
+    };
+
+    let scopedFilter: any = {
+      ...baseFilter,
+      channel,
+    };
+
+    if (externalId) {
+      scopedFilter['metadata.externalId'] = externalId;
+    }
+
+    if (pageId || accountId) {
+      const or: any[] = [];
+      if (pageId) or.push({ 'metadata.pageId': pageId });
+      if (accountId) or.push({ 'metadata.accountId': accountId });
+      if (or.length > 0) scopedFilter['$or'] = or;
+    }
+
+    // Find all matching conversations to delete (including potential duplicates)
+    const matches = await this.conversationModel
+      .find(scopedFilter)
+      .select('_id')
+      .lean();
+
+    const idsToDelete = (matches && matches.length > 0)
+      ? matches.map((c: any) => c._id)
+      : [new Types.ObjectId(id)];
+
+    // Delete conversations
+    await this.conversationModel.deleteMany({
+      _id: { $in: idsToDelete },
+      tenantId: new Types.ObjectId(tenantId),
+    });
+
+    // Delete all messages linked to those conversations
     await this.messageModel.deleteMany({
-      conversationId: new Types.ObjectId(id),
+      conversationId: { $in: idsToDelete },
       tenantId: new Types.ObjectId(tenantId),
     });
   }
