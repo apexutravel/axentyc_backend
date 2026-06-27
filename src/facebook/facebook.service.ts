@@ -1395,8 +1395,12 @@ export class FacebookService {
                 platform: SocialPlatform.INSTAGRAM,
                 status: SocialAccountStatus.CONNECTED,
               });
-              const igLookup = igAccount?.accountId || pageId;
-              await this.handleIncomingMessage(igLookup, event, 'instagram');
+              if (fbAccount?.tenantId) {
+                await this.syncInstagramMessages(fbAccount.tenantId.toString());
+              } else {
+                const igLookup = igAccount?.accountId || pageId;
+                await this.handleIncomingMessage(igLookup, event, 'instagram');
+              }
             }
           } else if (event.message?.is_echo) {
             this.logger.debug('Received echo, skipping');
@@ -1437,7 +1441,16 @@ export class FacebookService {
       for (const event of entry.messaging || []) {
         try {
           if (event.message && !event.message.is_echo) {
-            await this.handleIncomingMessage(igAccountId, event, 'instagram');
+            const igAccount = await this.socialAccountModel.findOne({
+              accountId: igAccountId,
+              platform: SocialPlatform.INSTAGRAM,
+              status: SocialAccountStatus.CONNECTED,
+            });
+            if (igAccount?.tenantId) {
+              await this.syncInstagramMessages(igAccount.tenantId.toString());
+            } else {
+              await this.handleIncomingMessage(igAccountId, event, 'instagram');
+            }
           } else if (event.read) {
             await this.handleMessageRead(igAccountId, event);
           }
@@ -2236,11 +2249,11 @@ export class FacebookService {
 
       if (!igAccount) continue;
 
-      this.logger.log(`[IG Sync] Polling Instagram DMs for page ${fbAccount.pageId} (IG: ${igAccount.accountId})`);
+      this.logger.log(`[IG Sync] Fetching Instagram DMs for page ${fbAccount.pageId} (IG: ${igAccount.accountId})`);
 
       try {
         // GET /{page-id}/conversations?platform=instagram
-        const convUrl = `${this.graphApiUrl}/${fbAccount.pageId}/conversations?platform=instagram&access_token=${fbAccount.accessToken}`;
+        const convUrl = `${this.graphApiUrl}/${fbAccount.pageId}/conversations?platform=instagram&fields=id,updated_time,participants&access_token=${fbAccount.accessToken}`;
         const convResp = await fetch(convUrl);
         const convData = await convResp.json() as any;
 
@@ -2341,17 +2354,29 @@ export class FacebookService {
 
             if (detail.error) continue;
 
-            const isFromUs = detail.from?.id === igAccount.accountId;
+            const isFromUs = detail.from?.id === igAccount.accountId || detail.from?.id === fbAccount.pageId;
 
-            // For inbound messages, only set externalId if it's missing (don't overwrite webhook-set value)
-            if (!isFromUs && detail.from?.id && !conversation.metadata?.externalId) {
-              this.logger.log(`[IG Sync] Setting conversation externalId to ${detail.from.id} (IGSID from message)`);
-              await this.conversationModel.updateOne(
-                { _id: conversation._id },
-                { $set: { 'metadata.externalId': detail.from.id } },
-              );
-              conversation.metadata = conversation.metadata || {};
-              conversation.metadata.externalId = detail.from.id;
+            // For inbound messages, set/fix externalId to the sender IGSID from message details.
+            // It must not be the Graph conversation id; Send API needs the sender id.
+            if (!isFromUs && detail.from?.id) {
+              const currentExternalId = conversation.metadata?.externalId;
+              const shouldFixExternalId = !currentExternalId || currentExternalId === convId || currentExternalId === senderId;
+              if (shouldFixExternalId && currentExternalId !== detail.from.id) {
+                this.logger.log(`[IG Sync] Setting conversation externalId from ${currentExternalId} to ${detail.from.id} (IGSID from message)`);
+                await this.conversationModel.updateOne(
+                  { _id: conversation._id },
+                  { $set: { 'metadata.externalId': detail.from.id } },
+                );
+                conversation.metadata = conversation.metadata || {};
+                conversation.metadata.externalId = detail.from.id;
+              }
+
+              if (contact.customFields?.instagramPsid !== detail.from.id) {
+                await this.contactModel.updateOne(
+                  { _id: contact._id },
+                  { $set: { 'customFields.instagramPsid': detail.from.id } },
+                );
+              }
             }
 
             // Now check if message already exists by externalId
