@@ -107,7 +107,12 @@ export class EventsGateway implements OnGatewayInit, OnGatewayConnection, OnGate
     this.emitToTenant(tenantId, 'message.received', { 
       conversationId, 
       message,
-      contactId: contact ? { _id: contact._id, name: contact.name } : undefined,
+      contactId: contact ? { 
+        _id: contact._id, 
+        name: contact.name, 
+        avatar: contact.avatar,
+        username: contact?.socialProfiles?.instagram?.username || contact?.socialProfiles?.facebook?.username,
+      } : undefined,
       channel: message?.metadata?.platform,
     });
     this.emitToConversation(conversationId, 'message.new', message);

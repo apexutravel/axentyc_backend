@@ -1541,27 +1541,7 @@ export class FacebookService {
 
     // Get or create contact
     this.logger.debug(`[handleIncomingMessage] Getting/creating contact for senderId: ${senderId}`);
-    // Resolve best access token for profile lookup
-    let tokenToUse = account?.accessToken as string | undefined;
-    if (platform === 'instagram' && (!tokenToUse || tokenToUse.length < 10)) {
-      try {
-        const fbAccount = await this.socialAccountModel.findOne({
-          tenantId: new Types.ObjectId(tenantId),
-          platform: SocialPlatform.FACEBOOK,
-          pageId: account?.pageId || recipientId || accountId,
-          status: SocialAccountStatus.CONNECTED,
-        }).lean();
-        if (fbAccount?.accessToken) {
-          tokenToUse = fbAccount.accessToken;
-          this.logger.log('[handleIncomingMessage] Using linked Facebook Page access token for Instagram profile lookup');
-        } else {
-          this.logger.warn('[handleIncomingMessage] No access token found on linked Facebook Page for Instagram profile lookup');
-        }
-      } catch (e) {
-        this.logger.warn(`[handleIncomingMessage] Failed to resolve FB page token for IG lookup: ${e instanceof Error ? e.message : e}`);
-      }
-    }
-    const contact = await this.getOrCreateContact(tenantId, senderId, tokenToUse, platform);
+    const contact = await this.getOrCreateContact(tenantId, senderId, account.accessToken, platform);
     this.logger.log(`[handleIncomingMessage] Contact: ${contact._id} (${contact.name})`);
 
     // Get or create conversation
@@ -2093,7 +2073,6 @@ export class FacebookService {
     // Get profile from Facebook/Instagram to update name even if contact exists
     let name = `${platform === 'instagram' ? 'Instagram' : 'Facebook'} User ${senderId.slice(-4)}`;
     let profilePic: string | undefined;
-    let username: string | undefined;
 
     if (pageAccessToken) {
       try {
@@ -2126,12 +2105,6 @@ export class FacebookService {
             this.logger.warn(`[getOrCreateContact] Instagram profile has no 'name' or 'username' field`);
           }
           profilePic = profile.profile_pic;
-          
-          // Store username for socialProfiles
-          if (profile.username) {
-            username = profile.username;
-            this.logger.log(`[getOrCreateContact] Instagram username: ${username}`);
-          }
         } else {
           // Messenger uses first_name and last_name
           if (profile.first_name) {
@@ -2151,17 +2124,11 @@ export class FacebookService {
     }
 
     if (contact) {
-      // Update existing contact with latest name, profile pic, and username
+      // Update existing contact with latest name and profile pic
       if (contact.name !== name || contact.avatar !== profilePic) {
         this.logger.log(`[getOrCreateContact] Updating contact ${contact._id}: name "${contact.name}" -> "${name}", avatar updated: ${!!profilePic}`);
         contact.name = name;
         if (profilePic) contact.avatar = profilePic;
-        if (username && platform === 'instagram') {
-          contact.socialProfiles = contact.socialProfiles || {};
-          contact.socialProfiles.instagram = contact.socialProfiles.instagram || { id: senderId };
-          contact.socialProfiles.instagram.username = username;
-          this.logger.log(`[getOrCreateContact] Updated Instagram username: ${username}`);
-        }
         await contact.save();
       }
       return contact;
@@ -2173,10 +2140,6 @@ export class FacebookService {
       ? { instagramPsid: senderId }
       : { facebookPsid: senderId };
 
-    const socialProfiles = platform === 'instagram' && username
-      ? { instagram: { id: senderId, username } }
-      : undefined;
-
     this.logger.log(`[getOrCreateContact] Creating new contact: name="${name}", platform=${platform}, senderId=${senderId}`);
     contact = new this.contactModel({
       tenantId: new Types.ObjectId(tenantId),
@@ -2185,7 +2148,6 @@ export class FacebookService {
       avatar: profilePic,
       tags,
       customFields,
-      socialProfiles,
     });
 
     return contact.save();
