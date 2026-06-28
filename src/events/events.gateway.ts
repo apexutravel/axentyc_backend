@@ -104,16 +104,17 @@ export class EventsGateway implements OnGatewayInit, OnGatewayConnection, OnGate
 
   emitMessageReceived(tenantId: string, conversationId: string, message: any, contact?: any) {
     this.logger.log(`[Socket] Message received - tenant:${tenantId}, conv:${conversationId}`);
-    this.emitToTenant(tenantId, 'message.received', { 
-      conversationId, 
+    this.emitToTenant(tenantId, 'message.received', {
+      conversationId,
       message,
-      contactId: contact ? { 
-        _id: contact._id, 
-        name: contact.name, 
+      contactId: contact ? {
+        _id: contact._id,
+        name: contact.name,
         avatar: contact.avatar,
         username: contact?.socialProfiles?.instagram?.username || contact?.socialProfiles?.facebook?.username,
       } : undefined,
       channel: message?.metadata?.platform,
+      pageName: message?.metadata?.pageName,
     });
     this.emitToConversation(conversationId, 'message.new', message);
   }

@@ -1619,6 +1619,7 @@ export class FacebookService {
       metadata: {
         externalId: message.mid,
         platform,
+        pageName: account.accountName,
       },
     });
     const savedMessage = await newMessage.save();
