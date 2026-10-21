@@ -9,6 +9,8 @@ import { Message, MessageSchema } from '../conversations/entities/message.entity
 import { FacebookConfig, FacebookConfigSchema } from './entities/facebook-config.entity';
 import { ConversationsModule } from '../conversations/conversations.module';
 import { EventsModule } from '../events/events.module';
+import { BillingModule } from '../billing/billing.module';
+import { MembershipsModule } from '../memberships/memberships.module';
 
 @Module({
   imports: [
@@ -21,6 +23,8 @@ import { EventsModule } from '../events/events.module';
     ]),
     forwardRef(() => ConversationsModule),
     forwardRef(() => EventsModule),
+    BillingModule,
+    MembershipsModule,
   ],
   controllers: [FacebookController],
   providers: [FacebookService],

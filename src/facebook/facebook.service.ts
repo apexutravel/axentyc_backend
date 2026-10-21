@@ -3,6 +3,7 @@ import {
   Logger,
   BadRequestException,
   NotFoundException,
+  ConflictException,
 } from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { InjectModel } from '@nestjs/mongoose';
@@ -13,6 +14,9 @@ import {
   SocialAccountDocument,
   SocialPlatform,
   SocialAccountStatus,
+  IntegrationProvider,
+  ConnectedAssetType,
+  IntegrationCapability,
 } from '../integrations/entities/social-account.entity';
 import {
   Conversation,
@@ -24,7 +28,8 @@ import { Message, MessageDocument, MessageDirection, MessageType, MessageStatus 
 import { EventsGateway } from '../events/events.gateway';
 import { Contact, ContactDocument, ContactSource } from '../crm/entities/contact.entity';
 import { FacebookConfig, FacebookConfigDocument } from './entities/facebook-config.entity';
-import { randomUUID } from 'crypto';
+import { BillingService } from '../billing/billing.service';
+import { createHmac, randomUUID, timingSafeEqual } from 'crypto';
 
 @Injectable()
 export class FacebookService {
@@ -45,13 +50,14 @@ export class FacebookService {
     private facebookConfigModel: Model<FacebookConfigDocument>,
     private configService: ConfigService,
     private eventsGateway: EventsGateway,
+    private billingService: BillingService,
   ) {}
 
   // Get global Facebook app config from environment variables
   private getGlobalAppConfig(): { appId: string; appSecret: string; verifyToken: string } | null {
     const appId = this.configService.get<string>('FACEBOOK_APP_ID');
     const appSecret = this.configService.get<string>('FACEBOOK_APP_SECRET');
-    const verifyToken = this.configService.get<string>('FACEBOOK_VERIFY_TOKEN') || 'axentyc_fb_verify';
+    const verifyToken = this.configService.get<string>('FACEBOOK_VERIFY_TOKEN') || '';
 
     if (!appId || !appSecret) {
       this.logger.warn('Facebook app credentials not configured in environment variables');
@@ -195,6 +201,7 @@ export class FacebookService {
       if (conversation) {
         const replyMessage = new this.messageModel({
           tenantId: new Types.ObjectId(tenantId),
+          workspaceId: (conversation as any).workspaceId,
           conversationId: conversation._id,
           direction: MessageDirection.OUTBOUND,
           type: MessageType.TEXT,
@@ -470,6 +477,17 @@ export class FacebookService {
         this.logger.log(`[Sync] Fetching posts for page ${account.pageId}`);
         const resp = await fetch(url);
         const data = (await resp.json()) as any;
+        if (data?.error) {
+          // Invalid / revoked token: flag the account so the UI can ask to reconnect
+          if (data.error.code === 190) {
+            await this.socialAccountModel.updateOne(
+              { _id: account._id },
+              { $set: { status: SocialAccountStatus.ERROR } },
+            );
+          }
+          results.push({ pageId: account.pageId, status: 'error', error: data.error.message || 'Graph API error' });
+          continue;
+        }
         const posts: any[] = Array.isArray(data?.data) ? data.data : [];
 
         let created = 0;
@@ -510,6 +528,8 @@ export class FacebookService {
     const createdTimeIso: string | undefined = c?.created_time;
 
     if (!commentId || !commenterId) return false;
+    // Skip comments written by the page itself
+    if (commenterId === account.pageId) return false;
 
     const exists = await this.messageModel.findOne({
       tenantId: new Types.ObjectId(tenantId),
@@ -523,6 +543,7 @@ export class FacebookService {
       commenterId,
       account.accessToken,
       'facebook',
+      account.workspaceId,
     );
 
     // Ensure conversation for this post
@@ -538,6 +559,7 @@ export class FacebookService {
     // Save message
     const newMessage = new this.messageModel({
       tenantId: new Types.ObjectId(tenantId),
+      workspaceId: (conversation as any).workspaceId,
       conversationId: conversation._id,
       direction: MessageDirection.INBOUND,
       type: MessageType.TEXT,
@@ -584,7 +606,7 @@ export class FacebookService {
       'permalink_url',
       'created_time',
       'from{id,name,picture}',
-      'admin_creator{id,name,picture}',
+      'admin_creator{id,name}',
       'message',
       'story',
       'status_type',
@@ -611,23 +633,21 @@ export class FacebookService {
       const profileId = profile?.id;
       if (!profileId || profile?.picture?.data?.url) return;
       if (!profileCache.has(profileId)) {
+        // Never embed access tokens in URLs sent to the client; unavailable avatars stay null.
+        let picUrl: string | null = null;
         try {
-          const fields = 'picture.type(large),profile_pic';
+          const fields = 'picture.type(large)';
           const url = `${this.graphApiUrl}/${profileId}?fields=${encodeURIComponent(fields)}&access_token=${pageAccessToken}`;
           const resp = await fetch(url);
-          const data = await resp.json() as any;
-          const picUrl = data?.picture?.data?.url || data?.profile_pic || null;
-          if (!picUrl) {
-            // Fallback: try simple picture field
-            const fallbackUrl = `${this.graphApiUrl}/${profileId}/picture?type=normal&access_token=${pageAccessToken}`;
-            profileCache.set(profileId, fallbackUrl);
-          } else {
-            profileCache.set(profileId, picUrl);
+          const data = (await resp.json()) as any;
+          // Errors (e.g. non-user profiles such as applications) are ignored on purpose
+          if (!data?.error) {
+            picUrl = data?.picture?.data?.url || null;
           }
         } catch {
-          // Last resort: use the redirect endpoint directly
-          profileCache.set(profileId, `${this.graphApiUrl}/${profileId}/picture?type=normal&access_token=${pageAccessToken}`);
+          picUrl = null;
         }
+        profileCache.set(profileId, picUrl);
       }
       const url = profileCache.get(profileId);
       if (url) {
@@ -656,8 +676,13 @@ export class FacebookService {
     });
   }
 
+  get graphApiVersion(): string {
+    const v = this.configService.get<string>('FACEBOOK_GRAPH_VERSION') || 'v23.0';
+    return v.startsWith('v') ? v : `v${v}`;
+  }
+
   get graphApiUrl(): string {
-    return 'https://graph.facebook.com/v21.0';
+    return `https://graph.facebook.com/${this.graphApiVersion}`;
   }
 
   // ─── Config Management ───
@@ -705,7 +730,37 @@ export class FacebookService {
 
   // ─── OAuth Flow ───
 
-  async getOAuthUrl(tenantId: string, redirectUri: string): Promise<string | null> {
+  // Signed, expiring OAuth `state` bound to tenant + user (CSRF protection)
+  private signOAuthState(tenantId: string, userId: string): string {
+    const secret = this.configService.get<string>('FACEBOOK_APP_SECRET') || '';
+    const payload = Buffer.from(JSON.stringify({ t: tenantId, u: userId, ts: Date.now(), n: randomUUID() })).toString('base64url');
+    const sig = createHmac('sha256', secret).update(`fb-oauth-state:${payload}`).digest('base64url');
+    return `${payload}.${sig}`;
+  }
+
+  verifyOAuthState(state: string | undefined, tenantId: string, userId: string): void {
+    const secret = this.configService.get<string>('FACEBOOK_APP_SECRET') || '';
+    const invalid = () => new BadRequestException('Invalid or expired OAuth state. Please restart the Facebook connection.');
+    if (!state || typeof state !== 'string' || !secret) throw invalid();
+    const [payload, sig] = state.split('.');
+    if (!payload || !sig) throw invalid();
+    const expected = createHmac('sha256', secret).update(`fb-oauth-state:${payload}`).digest('base64url');
+    const a = Buffer.from(sig);
+    const b = Buffer.from(expected);
+    if (a.length !== b.length || !timingSafeEqual(a, b)) throw invalid();
+    let data: any;
+    try {
+      data = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8'));
+    } catch {
+      throw invalid();
+    }
+    const maxAgeMs = 30 * 60 * 1000;
+    if (data?.t !== tenantId || data?.u !== userId || !data?.ts || Date.now() - data.ts > maxAgeMs) {
+      throw invalid();
+    }
+  }
+
+  async getOAuthUrl(tenantId: string, userId: string, redirectUri: string): Promise<string | null> {
     const config = this.getGlobalAppConfig();
     if (!config) {
       this.logger.warn('Facebook app not configured');
@@ -721,6 +776,8 @@ export class FacebookService {
       'instagram_basic',
       'instagram_manage_messages',
       'instagram_manage_comments',
+      'pages_read_user_content',
+      'business_management',
     ].join(',');
 
     const params = new URLSearchParams({
@@ -728,11 +785,11 @@ export class FacebookService {
       redirect_uri: redirectUri,
       scope: scopes,
       response_type: 'code',
-      state: tenantId,
+      state: this.signOAuthState(tenantId, userId),
       auth_type: 'rerequest',
     });
 
-    return `https://www.facebook.com/v21.0/dialog/oauth?${params.toString()}`;
+    return `https://www.facebook.com/${this.graphApiVersion}/dialog/oauth?${params.toString()}`;
   }
 
   async exchangeCodeForToken(tenantId: string, code: string, redirectUri: string): Promise<{
@@ -744,7 +801,7 @@ export class FacebookService {
       throw new BadRequestException('Facebook app not configured');
     }
 
-    this.logger.log(`[exchangeCodeForToken] Starting - appId: ${config.appId}, secret length: ${config.appSecret?.length}, redirectUri: ${redirectUri}`);
+    this.logger.log(`[exchangeCodeForToken] Starting - appId: ${config.appId}, redirectUri: ${redirectUri}`);
 
     const url = `${this.graphApiUrl}/oauth/access_token?client_id=${config.appId}&client_secret=${config.appSecret}&redirect_uri=${encodeURIComponent(redirectUri)}&code=${code}`;
 
@@ -903,6 +960,9 @@ export class FacebookService {
         category: page.category,
         fanCount: page.fanCount,
         instagramAccount: page.instagramAccount,
+        instagramLinked: page.instagramLinked,
+        instagramError: page.instagramError,
+        hasInstagramBusinessAccount: page.hasInstagramBusinessAccount,
       })),
     };
   }
@@ -920,8 +980,11 @@ export class FacebookService {
       throw new BadRequestException('Selected Facebook page is not available. Please reconnect Facebook.');
     }
 
-    this.pendingPageSelections.delete(selectionToken);
     return page;
+  }
+
+  discardPendingPageSelection(selectionToken: string) {
+    this.pendingPageSelections.delete(selectionToken);
   }
 
   // ─── Connect / Disconnect ───
@@ -932,12 +995,46 @@ export class FacebookService {
     pageName: string,
     pageAccessToken: string,
     metadata?: Record<string, any>,
+    workspaceId?: string,
   ): Promise<SocialAccount> {
+    const instagramAccount = metadata?.instagramAccount;
+    const workspaceObjectId = workspaceId ? new Types.ObjectId(workspaceId) : undefined;
+    const existingAccounts = await this.socialAccountModel.find({
+      tenantId: new Types.ObjectId(tenantId),
+      isActive: true,
+      $or: [
+        { platform: SocialPlatform.FACEBOOK, pageId },
+        ...(instagramAccount?.id
+          ? [{ platform: SocialPlatform.INSTAGRAM, accountId: instagramAccount.id }]
+          : []),
+      ],
+    });
+    // A page / Instagram account lives in exactly one workspace
+    const elsewhere = existingAccounts.find(
+      (a) => a.status === SocialAccountStatus.CONNECTED && a.workspaceId && workspaceObjectId && !a.workspaceId.equals(workspaceObjectId),
+    );
+    if (elsewhere) {
+      throw new ConflictException(
+        `"${elsewhere.accountName}" ya está conectada en otro workspace de esta cuenta. Desconéctala allí primero.`,
+      );
+    }
+
+    const existingKeys = new Set(
+      existingAccounts.map((account) => `${account.platform}:${account.platform === SocialPlatform.INSTAGRAM ? account.accountId : account.pageId}`),
+    );
+    const newAssets = [
+      !existingKeys.has(`${SocialPlatform.FACEBOOK}:${pageId}`),
+      !!instagramAccount?.id && !existingKeys.has(`${SocialPlatform.INSTAGRAM}:${instagramAccount.id}`),
+    ].filter(Boolean).length;
+
+    if (newAssets > 0) {
+      await this.billingService.assertCanAddConnectedAssets(tenantId, newAssets);
+    }
+
     // Subscribe page to webhook (includes Instagram if linked)
     await this.subscribePageToWebhook(pageId, pageAccessToken);
 
     // Check if page has Instagram linked
-    const instagramAccount = metadata?.instagramAccount;
     if (instagramAccount?.id) {
       this.logger.log(`Instagram account @${instagramAccount.username} detected for page ${pageId}`);
       // Subscribe Instagram to webhook (non-blocking: don't fail FB connection if IG fails)
@@ -957,7 +1054,11 @@ export class FacebookService {
       },
       {
         tenantId: new Types.ObjectId(tenantId),
+        workspaceId: workspaceObjectId,
         platform: SocialPlatform.FACEBOOK,
+        provider: IntegrationProvider.META,
+        assetType: ConnectedAssetType.FACEBOOK_PAGE,
+        capabilities: [IntegrationCapability.MESSENGER, IntegrationCapability.FACEBOOK_COMMENTS],
         accountName: pageName,
         pageId,
         accessToken: pageAccessToken,
@@ -979,7 +1080,11 @@ export class FacebookService {
         },
         {
           tenantId: new Types.ObjectId(tenantId),
+          workspaceId: workspaceObjectId,
           platform: SocialPlatform.INSTAGRAM,
+          provider: IntegrationProvider.META,
+          assetType: ConnectedAssetType.INSTAGRAM_ACCOUNT,
+          capabilities: [IntegrationCapability.INSTAGRAM_DM, IntegrationCapability.INSTAGRAM_COMMENTS],
           accountName: instagramAccount.username,
           accountId: instagramAccount.id,
           pageId, // Link back to Facebook page
@@ -1054,15 +1159,17 @@ export class FacebookService {
     this.logger.log(`${account.platform} account "${account.accountName}" disconnected for tenant ${tenantId}`);
   }
 
-  async getStatus(tenantId: string): Promise<{
+  async getStatus(tenantId: string, workspaceId?: string): Promise<{
     connected: boolean;
     accounts: SocialAccount[];
   }> {
     const accounts = await this.socialAccountModel
       .find({
         tenantId: new Types.ObjectId(tenantId),
+        ...(workspaceId ? { workspaceId: new Types.ObjectId(workspaceId) } : {}),
         platform: { $in: [SocialPlatform.FACEBOOK, SocialPlatform.INSTAGRAM] },
       })
+      .select('-accessToken -refreshToken -webhookSecret')
       .exec();
 
     return {
@@ -1280,7 +1387,7 @@ export class FacebookService {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         access_token: pageAccessToken,
-        subscribed_fields: ['messages', 'messaging_postbacks', 'message_reads', 'message_deliveries', 'feed'],
+        subscribed_fields: ['messages', 'message_echoes', 'messaging_postbacks', 'message_reads', 'message_deliveries', 'feed'],
       }),
     });
 
@@ -1328,12 +1435,12 @@ export class FacebookService {
 
     // Check global verify token from env
     const globalConfig = this.getGlobalAppConfig();
-    if (globalConfig && token === globalConfig.verifyToken) {
+    if (globalConfig && globalConfig.verifyToken && token === globalConfig.verifyToken) {
       this.logger.log('Facebook webhook verified with global token');
       return challenge;
     }
 
-    this.logger.warn(`Webhook verification failed - token mismatch: ${token}`);
+    this.logger.warn('Webhook verification failed - verify token mismatch');
     throw new BadRequestException('Webhook verification failed');
   }
 
@@ -1390,7 +1497,13 @@ export class FacebookService {
             
             await this.handleIncomingMessage(accountId, event, platform);
           } else if (event.message?.is_echo) {
-            this.logger.debug('Received echo, skipping');
+            // Echo of a message sent by the page/IG account (from AXENTYC or from outside it)
+            const isIgEcho = !!igAccount && event.sender?.id === igAccount.accountId;
+            await this.handleIncomingMessage(
+              isIgEcho ? igAccount!.accountId! : pageId,
+              event,
+              isIgEcho ? 'instagram' : 'facebook',
+            );
           } else if (event.read) {
             await this.handleMessageRead(pageId, event);
           } else if (event.delivery) {
@@ -1460,6 +1573,8 @@ export class FacebookService {
             // Process message immediately for real-time response
             // Use the IG accountId for lookup (not pageId)
             await this.handleIncomingMessage(igAccount.accountId || igAccountId, event, 'instagram');
+          } else if (event.message?.is_echo) {
+            await this.handleIncomingMessage(igAccountId, event, 'instagram');
           } else if (event.read) {
             await this.handleMessageRead(igAccountId, event);
           }
@@ -1482,15 +1597,23 @@ export class FacebookService {
   }
 
   private async handleIncomingMessage(accountId: string, event: any, platform: 'facebook' | 'instagram'): Promise<void> {
-    const senderId = event.sender?.id;
-    const recipientId = event.recipient?.id;
-    const timestamp = event.timestamp;
     const message = event.message;
+    const isEcho = !!message?.is_echo;
+    // For echoes the page/IG account is the sender and the end user is the recipient.
+    const senderId = isEcho ? event.recipient?.id : event.sender?.id; // end user (PSID / IGSID)
+    const recipientId = isEcho ? event.sender?.id : event.recipient?.id; // our page / IG account
 
     if (!senderId || !message) return;
 
-    this.logger.log(`Incoming ${platform} message from ${senderId} to account ${accountId}`);
-    this.logger.debug(`Event details - senderId: ${senderId}, recipientId: ${recipientId}, paramAccountId: ${accountId}`);
+    // Messages sent from AXENTYC through our own app are already stored locally
+    if (isEcho) {
+      const ownAppId = this.configService.get<string>('FACEBOOK_APP_ID');
+      if (ownAppId && message.app_id && String(message.app_id) === String(ownAppId)) {
+        return;
+      }
+    }
+
+    this.logger.log(`${isEcho ? 'Echo' : 'Incoming'} ${platform} message, account ${accountId}`);
 
     // Find the social account (Facebook page or Instagram account)
     // For Facebook, recipientId is the Page ID. For Instagram, recipientId can vary by payload version.
@@ -1537,7 +1660,23 @@ export class FacebookService {
     }
 
     const tenantId = account.tenantId.toString();
-    this.logger.log(`[handleIncomingMessage] Processing for tenant: ${tenantId}`);
+
+    // Ignore anything authored by our own page / Instagram account (non-echo self events)
+    if (!isEcho && (senderId === account.pageId || senderId === account.accountId)) {
+      return;
+    }
+
+    // Deduplicate webhook retries / re-deliveries by message id
+    if (message.mid) {
+      const alreadyStored = await this.messageModel.exists({
+        tenantId: new Types.ObjectId(tenantId),
+        'metadata.externalId': message.mid,
+      });
+      if (alreadyStored) {
+        this.logger.debug(`[handleIncomingMessage] Duplicate message ${message.mid} ignored`);
+        return;
+      }
+    }
 
     // Get or create contact
     this.logger.debug(`[handleIncomingMessage] Getting/creating contact for senderId: ${senderId}`);
@@ -1561,7 +1700,7 @@ export class FacebookService {
         this.logger.warn(`[handleIncomingMessage] Failed to resolve FB page token for IG lookup: ${e instanceof Error ? e.message : e}`);
       }
     }
-    const contact = await this.getOrCreateContact(tenantId, senderId, tokenToUse, platform);
+    const contact = await this.getOrCreateContact(tenantId, senderId, tokenToUse, platform, account.workspaceId);
     this.logger.log(`[handleIncomingMessage] Contact: ${contact._id} (${contact.name})`);
 
     // Get or create conversation
@@ -1609,17 +1748,19 @@ export class FacebookService {
     // Add message to conversation
     const newMessage = new this.messageModel({
       tenantId: new Types.ObjectId(tenantId),
+      workspaceId: (conversation as any).workspaceId,
       conversationId: conversation._id,
-      direction: MessageDirection.INBOUND,
+      direction: isEcho ? MessageDirection.OUTBOUND : MessageDirection.INBOUND,
       type,
       content,
       media,
-      senderName: contact.name,
+      senderName: isEcho ? account.accountName : contact.name,
       status: MessageStatus.SENT,
       metadata: {
         externalId: message.mid,
         platform,
         pageName: account.accountName,
+        ...(isEcho ? { sentExternally: true } : {}),
       },
     });
     const savedMessage = await newMessage.save();
@@ -1632,14 +1773,20 @@ export class FacebookService {
       {
         lastMessage: content,
         lastMessageAt: new Date(),
-        status: ConversationStatus.IN_PROGRESS,
-        $inc: { unreadCount: isBeingViewed ? 0 : 1 },
+        ...(isEcho ? {} : { status: ConversationStatus.IN_PROGRESS }),
+        $inc: { unreadCount: isEcho || isBeingViewed ? 0 : 1 },
       },
       { new: true }
     ).populate('contactId').lean();
     // Notify conversation list update for UI refresh
     if (updatedConv) {
       this.eventsGateway.emitConversationUpdated(tenantId, updatedConv);
+    }
+
+    // Echoes: only refresh the open conversation, no inbound notification
+    if (isEcho) {
+      this.eventsGateway.emitToConversation(conversation._id.toString(), 'message.new', messageObj);
+      return;
     }
 
     // Emit real-time events
@@ -1676,7 +1823,7 @@ export class FacebookService {
 
   private async handleFeedComment(pageId: string, feedData: any): Promise<void> {
     // Handle comments on Facebook posts
-    this.logger.log(`[Feed] Processing feed data: ${JSON.stringify(feedData)}`);
+    this.logger.debug(`[Feed] Processing feed data: ${JSON.stringify(feedData)}`);
     const { item, verb, post_id, comment_id, message, from, created_time } = feedData;
 
     this.logger.log(`[Feed] item=${item}, verb=${verb}, post_id=${post_id}, comment_id=${comment_id}`);
@@ -1709,10 +1856,10 @@ export class FacebookService {
         if (accountForFetch?.accessToken) {
           const fields = 'from{id,name,picture},message,created_time,permalink_url,like_count,user_likes';
           const url = `${this.graphApiUrl}/${comment_id}?fields=${fields}&access_token=${accountForFetch.accessToken}`;
-          this.logger.debug(`[Feed] Fetching comment details from Graph API: ${url}`);
+          this.logger.debug(`[Feed] Fetching comment details from Graph API for ${comment_id}`);
           const resp = await fetch(url);
           if (resp.ok) {
-            const details = await resp.json();
+            const details = (await resp.json()) as any;
             this.logger.debug(`[Feed] Comment details: ${JSON.stringify(details)}`);
             commenterId = commenterId || details?.from?.id;
             commenterName = commenterName || details?.from?.name;
@@ -1734,10 +1881,16 @@ export class FacebookService {
       return;
     }
 
-    this.logger.log(`New comment on post ${post_id} from ${commenterName} (${commenterId})`);
-
     // Mark webhook as received for this page
     this.markWebhookReceived(pageId);
+
+    // Ignore comments authored by the page itself (e.g. replies sent from AXENTYC)
+    if (commenterId === pageId) {
+      this.logger.debug(`[Feed] Ignoring own page comment ${comment_id}`);
+      return;
+    }
+
+    this.logger.log(`New comment on post ${post_id} from ${commenterName} (${commenterId})`);
 
     // Find the social account for this page
     const account = await this.socialAccountModel.findOne({
@@ -1753,8 +1906,20 @@ export class FacebookService {
 
     const tenantId = account.tenantId.toString();
 
+    // Deduplicate webhook retries / polling overlap by comment id
+    if (comment_id) {
+      const alreadyStored = await this.messageModel.exists({
+        tenantId: new Types.ObjectId(tenantId),
+        'metadata.commentId': comment_id,
+      });
+      if (alreadyStored) {
+        this.logger.debug(`[Feed] Duplicate comment ${comment_id} ignored`);
+        return;
+      }
+    }
+
     // Get or create contact for the commenter
-    const contact = await this.getOrCreateContact(tenantId, commenterId, account.accessToken, 'facebook');
+    const contact = await this.getOrCreateContact(tenantId, commenterId, account.accessToken, 'facebook', account.workspaceId);
 
     // Get or create conversation for this post's comments
     const conversation = await this.getOrCreateCommentConversation(
@@ -1769,6 +1934,7 @@ export class FacebookService {
     // Save the comment as a message (allow empty text; store metadata)
     const newMessage = new this.messageModel({
       tenantId: new Types.ObjectId(tenantId),
+      workspaceId: (conversation as any).workspaceId,
       conversationId: conversation._id,
       direction: MessageDirection.INBOUND,
       type: MessageType.TEXT,
@@ -1804,6 +1970,7 @@ export class FacebookService {
 
     // Emit dedicated FB comment event for real-time UI updates
     this.eventsGateway.emitToTenant(tenantId, 'fb.comment.new', {
+      workspaceId: account.workspaceId?.toString(),
       postId: post_id,
       pageId,
       comment: {
@@ -1830,6 +1997,12 @@ export class FacebookService {
 
     const commenterId = from.id;
     const commenterUsername = from.username || 'Instagram User';
+
+    // Ignore comments authored by our own Instagram account (e.g. replies sent from AXENTYC)
+    if (commenterId === igAccountId) {
+      this.logger.debug(`[IG Comment] Ignoring own account comment ${commentId}`);
+      return;
+    }
     const mediaId = media?.id; // The post/media that was commented on
 
     this.logger.log(`New Instagram comment from @${commenterUsername} (${commenterId})`);
@@ -1848,8 +2021,20 @@ export class FacebookService {
 
     const tenantId = account.tenantId.toString();
 
+    // Deduplicate webhook retries by comment id
+    if (commentId) {
+      const alreadyStored = await this.messageModel.exists({
+        tenantId: new Types.ObjectId(tenantId),
+        'metadata.commentId': commentId,
+      });
+      if (alreadyStored) {
+        this.logger.debug(`[IG Comment] Duplicate comment ${commentId} ignored`);
+        return;
+      }
+    }
+
     // Get or create contact for the commenter
-    const contact = await this.getOrCreateContact(tenantId, commenterId, account.accessToken, 'instagram');
+    const contact = await this.getOrCreateContact(tenantId, commenterId, account.accessToken, 'instagram', account.workspaceId);
 
     // Get or create conversation for this post's comments
     const conversation = await this.getOrCreateInstagramCommentConversation(
@@ -1864,6 +2049,7 @@ export class FacebookService {
     // Save the comment as a message
     const newMessage = new this.messageModel({
       tenantId: new Types.ObjectId(tenantId),
+      workspaceId: (conversation as any).workspaceId,
       conversationId: conversation._id,
       direction: MessageDirection.INBOUND,
       type: MessageType.TEXT,
@@ -1882,11 +2068,32 @@ export class FacebookService {
 
     // Update conversation
     const isBeingViewedIg = this.eventsGateway.isConversationBeingViewed(conversation._id.toString());
-    await this.conversationModel.findByIdAndUpdate(conversation._id, {
-      lastMessage: text,
-      lastMessageAt: new Date(),
-      status: ConversationStatus.OPEN,
-      $inc: { unreadCount: isBeingViewedIg ? 0 : 1 },
+    const updatedIgConv = await this.conversationModel.findByIdAndUpdate(
+      conversation._id,
+      {
+        lastMessage: text,
+        lastMessageAt: new Date(),
+        status: ConversationStatus.OPEN,
+        $inc: { unreadCount: isBeingViewedIg ? 0 : 1 },
+      },
+      { new: true },
+    ).populate('contactId').lean();
+
+    // Real-time UI updates (same events used for DMs / Facebook comments)
+    if (updatedIgConv) {
+      this.eventsGateway.emitConversationUpdated(tenantId, updatedIgConv);
+    }
+    this.eventsGateway.emitMessageReceived(tenantId, conversation._id.toString(), savedMessage, contact);
+    this.eventsGateway.emitToTenant(tenantId, 'ig.comment.new', {
+      workspaceId: account.workspaceId?.toString(),
+      mediaId,
+      accountId: igAccountId,
+      comment: {
+        id: commentId,
+        from: { id: commenterId, username: commenterUsername },
+        text,
+        created_time: new Date().toISOString(),
+      },
     });
 
     this.logger.log(`Instagram comment saved as message in conversation ${conversation._id}`);
@@ -2038,7 +2245,7 @@ export class FacebookService {
     this.logger.log(`Direct FB message sent to ${recipientPsid}, mid: ${result.message_id}`);
 
     // Also create or find contact and conversation for this recipient
-    const contact = await this.getOrCreateContact(tenantId, recipientPsid, account.accessToken, 'facebook');
+    const contact = await this.getOrCreateContact(tenantId, recipientPsid, account.accessToken, 'facebook', account.workspaceId);
     const conversation = await this.getOrCreateConversation(
       tenantId,
       contact._id.toString(),
@@ -2051,6 +2258,7 @@ export class FacebookService {
     // Save the outbound message
     const newMessage = new this.messageModel({
       tenantId: new Types.ObjectId(tenantId),
+      workspaceId: (conversation as any).workspaceId,
       conversationId: conversation._id,
       direction: MessageDirection.OUTBOUND,
       type: MessageType.TEXT,
@@ -2083,11 +2291,13 @@ export class FacebookService {
     senderId: string,
     pageAccessToken?: string,
     platform: 'facebook' | 'instagram' = 'facebook',
+    workspaceId?: Types.ObjectId | string,
   ): Promise<ContactDocument> {
-    // Check if contact exists by PSID (works for both FB and IG)
+    // Check if contact exists by PSID (works for both FB and IG) inside the same workspace
     const psidField = platform === 'instagram' ? 'customFields.instagramPsid' : 'customFields.facebookPsid';
     let contact = await this.contactModel.findOne({
       tenantId: new Types.ObjectId(tenantId),
+      ...(workspaceId ? { workspaceId: new Types.ObjectId(workspaceId.toString()) } : {}),
       [psidField]: senderId,
     });
 
@@ -2104,12 +2314,11 @@ export class FacebookService {
           ? 'id,username,name,profile_pic' 
           : 'id,first_name,last_name,profile_pic';
         const url = `${this.graphApiUrl}/${senderId}?fields=${fields}&access_token=${pageAccessToken}`;
-        this.logger.log(`[getOrCreateContact] Fetching ${platform} profile from: ${url}`);
-        this.logger.log(`[getOrCreateContact] Using access token (first 20 chars): ${pageAccessToken.substring(0, 20)}...`);
+        this.logger.debug(`[getOrCreateContact] Fetching ${platform} profile for ${senderId}`);
         const res = await fetch(url);
         const profile = await res.json() as any;
         
-        this.logger.log(`[getOrCreateContact] ${platform} API response: ${JSON.stringify(profile)}`);
+        this.logger.debug(`[getOrCreateContact] ${platform} API response received (error: ${!!profile.error})`);
         
         if (profile.error) {
           this.logger.error(`[getOrCreateContact] ${platform} API error: ${profile.error.message} (type: ${profile.error.type})`);
@@ -2181,6 +2390,7 @@ export class FacebookService {
     this.logger.log(`[getOrCreateContact] Creating new contact: name="${name}", platform=${platform}, senderId=${senderId}`);
     contact = new this.contactModel({
       tenantId: new Types.ObjectId(tenantId),
+      workspaceId: workspaceId ? new Types.ObjectId(workspaceId.toString()) : undefined,
       name,
       source: platform === 'instagram' ? ContactSource.INSTAGRAM : ContactSource.FACEBOOK,
       avatar: profilePic,
@@ -2190,6 +2400,19 @@ export class FacebookService {
     });
 
     return contact.save();
+  }
+
+  /** Workspace of the connected page / Instagram account an event belongs to. */
+  private async accountWorkspace(tenantId: string, platform: SocialPlatform, id: string): Promise<Types.ObjectId | undefined> {
+    const account = await this.socialAccountModel
+      .findOne({
+        tenantId: new Types.ObjectId(tenantId),
+        platform,
+        $or: [{ pageId: id }, { accountId: id }],
+      })
+      .select('workspaceId')
+      .lean();
+    return (account as any)?.workspaceId;
   }
 
   private async getOrCreateConversation(
@@ -2234,6 +2457,11 @@ export class FacebookService {
 
     const newConversation = new this.conversationModel({
       tenantId: new Types.ObjectId(tenantId),
+      workspaceId: await this.accountWorkspace(
+        tenantId,
+        platform === 'instagram' ? SocialPlatform.INSTAGRAM : SocialPlatform.FACEBOOK,
+        accountId,
+      ),
       contactId: new Types.ObjectId(contactId),
       channel,
       subject,
@@ -2277,6 +2505,7 @@ export class FacebookService {
     const newConversation = new this.conversationModel({
       tenantId: new Types.ObjectId(tenantId),
       contactId: new Types.ObjectId(contactId),
+      workspaceId: await this.accountWorkspace(tenantId, SocialPlatform.FACEBOOK, pageId),
       channel: ConversationChannel.FACEBOOK,
       subject: `Comentarios Facebook`,
       status: ConversationStatus.OPEN,
@@ -2318,6 +2547,7 @@ export class FacebookService {
     const newConversation = new this.conversationModel({
       tenantId: new Types.ObjectId(tenantId),
       contactId: new Types.ObjectId(contactId),
+      workspaceId: await this.accountWorkspace(tenantId, SocialPlatform.INSTAGRAM, igAccountId),
       channel: ConversationChannel.INSTAGRAM,
       subject: `Comentarios Instagram`,
       status: ConversationStatus.OPEN,
@@ -2386,7 +2616,7 @@ export class FacebookService {
           const senderUsername = sender?.username;
 
           // Get or create contact (same helper as webhook)
-          const contact = await this.getOrCreateContact(tenantId, senderId, fbAccount.accessToken, 'instagram');
+          const contact = await this.getOrCreateContact(tenantId, senderId, fbAccount.accessToken, 'instagram', igAccount.workspaceId);
 
           // Get or create conversation — search by Graph API conversation ID (stable, never changes)
           // This prevents duplicates that happened when searching by externalId (which gets updated)
@@ -2418,6 +2648,7 @@ export class FacebookService {
             conversation = new this.conversationModel({
               tenantId: new Types.ObjectId(tenantId),
               contactId: contact._id,
+              workspaceId: igAccount.workspaceId,
               channel: ConversationChannel.INSTAGRAM,
               subject: 'Instagram DM',
               status: ConversationStatus.OPEN,
@@ -2528,6 +2759,7 @@ export class FacebookService {
 
             const newMessage = new this.messageModel({
               tenantId: new Types.ObjectId(tenantId),
+              workspaceId: (conversation as any).workspaceId,
               conversationId: conversation._id,
               direction: isFromUs ? MessageDirection.OUTBOUND : MessageDirection.INBOUND,
               type,

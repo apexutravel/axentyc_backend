@@ -27,6 +27,9 @@ export class Conversation {
   @Prop({ type: Types.ObjectId, ref: 'Tenant', required: true, index: true })
   tenantId: Types.ObjectId;
 
+  @Prop({ type: Types.ObjectId, ref: 'Workspace', index: true })
+  workspaceId?: Types.ObjectId;
+
   @Prop({ type: Types.ObjectId, ref: 'Contact' })
   contactId?: Types.ObjectId;
 
@@ -86,6 +89,7 @@ export class Conversation {
 export const ConversationSchema = SchemaFactory.createForClass(Conversation);
 
 ConversationSchema.index({ tenantId: 1, status: 1 });
+ConversationSchema.index({ tenantId: 1, workspaceId: 1 });
 ConversationSchema.index({ tenantId: 1, channel: 1 });
 ConversationSchema.index({ tenantId: 1, assignedTo: 1 });
 ConversationSchema.index({ tenantId: 1, lastMessageAt: -1 });

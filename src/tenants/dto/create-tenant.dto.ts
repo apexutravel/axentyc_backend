@@ -22,4 +22,9 @@ export class CreateTenantDto {
   @IsEnum(TenantPlan)
   @IsOptional()
   plan?: TenantPlan;
+
+  @ApiPropertyOptional({ example: 'monthly' })
+  @IsString()
+  @IsOptional()
+  billingCycle?: 'monthly' | 'yearly';
 }

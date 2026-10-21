@@ -2,6 +2,11 @@ import { IsString, IsBoolean, IsOptional, IsArray, IsHexColor, IsIn } from 'clas
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 
 export class CreateWidgetConfigDto {
+  @ApiPropertyOptional({ example: '507f1f77bcf86cd799439011' })
+  @IsOptional()
+  @IsString()
+  workspaceId?: string;
+
   @ApiPropertyOptional({ default: 'Hola! ¿En qué podemos ayudarte?' })
   @IsOptional()
   @IsString()

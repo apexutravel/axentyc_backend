@@ -18,6 +18,7 @@ import { InviteUserDto } from './dto/invite-user.dto';
 import { ChangePasswordDto } from './dto/change-password.dto';
 import { ChangeRoleDto } from './dto/change-role.dto';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
+import { MembershipsService } from '../memberships/memberships.service';
 
 @ApiTags('users')
 @ApiBearerAuth()
@@ -27,6 +28,7 @@ export class UsersController {
   constructor(
     private readonly usersService: UsersService,
     private readonly invitationsService: InvitationsService,
+    private readonly membershipsService: MembershipsService,
   ) {}
 
   @Post()
@@ -43,31 +45,36 @@ export class UsersController {
 
   @Get('invitations')
   @ApiOperation({ summary: 'Get all invitations for tenant' })
-  getInvitations(@CurrentUser() user: any) {
+  async getInvitations(@CurrentUser() user: any) {
+    await this.membershipsService.assertCanManageAccount(user.tenantId, user._id || user.sub);
     return this.invitationsService.findAllByTenant(user.tenantId);
   }
 
   @Post('invite')
   @ApiOperation({ summary: 'Invite a new user to the tenant' })
-  invite(@CurrentUser() user: any, @Body() inviteDto: InviteUserDto) {
-    return this.invitationsService.create(user.tenantId, user.sub, inviteDto);
+  async invite(@CurrentUser() user: any, @Body() inviteDto: InviteUserDto) {
+    await this.membershipsService.assertCanManageAccount(user.tenantId, user._id || user.sub);
+    return this.invitationsService.create(user.tenantId, user._id || user.sub, inviteDto);
   }
 
   @Delete('invitations/:id')
   @ApiOperation({ summary: 'Cancel an invitation' })
-  cancelInvitation(@CurrentUser() user: any, @Param('id') id: string) {
+  async cancelInvitation(@CurrentUser() user: any, @Param('id') id: string) {
+    await this.membershipsService.assertCanManageAccount(user.tenantId, user._id || user.sub);
     return this.invitationsService.cancel(user.tenantId, id);
   }
 
   @Post(':id/change-password')
   @ApiOperation({ summary: 'Change user password (admin only)' })
-  changePassword(@Param('id') id: string, @Body() dto: ChangePasswordDto) {
+  async changePassword(@CurrentUser() user: any, @Param('id') id: string, @Body() dto: ChangePasswordDto) {
+    await this.membershipsService.assertCanManageAccount(user.tenantId, user._id || user.sub);
     return this.usersService.changePassword(id, dto.newPassword);
   }
 
   @Patch(':id/role')
   @ApiOperation({ summary: 'Change user role (admin only)' })
-  changeRole(@CurrentUser() user: any, @Param('id') id: string, @Body() dto: ChangeRoleDto) {
+  async changeRole(@CurrentUser() user: any, @Param('id') id: string, @Body() dto: ChangeRoleDto) {
+    await this.membershipsService.assertCanManageAccount(user.tenantId, user._id || user.sub);
     return this.usersService.changeRole(id, user.tenantId, dto.role);
   }
 
@@ -92,14 +99,14 @@ export class UsersController {
   @Post('fcm-token')
   @ApiOperation({ summary: 'Register FCM token for push notifications' })
   async registerFCMToken(@CurrentUser() user: any, @Body('token') token: string) {
-    await this.usersService.addFCMToken(user.sub, token);
+    await this.usersService.addFCMToken(user._id || user.sub, token);
     return { success: true };
   }
 
   @Delete('fcm-token')
   @ApiOperation({ summary: 'Unregister FCM token' })
   async unregisterFCMToken(@CurrentUser() user: any, @Body('token') token: string) {
-    await this.usersService.removeFCMToken(user.sub, token);
+    await this.usersService.removeFCMToken(user._id || user.sub, token);
     return { success: true };
   }
 }

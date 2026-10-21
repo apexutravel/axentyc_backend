@@ -24,6 +24,9 @@ export class Lead {
   @Prop({ type: Types.ObjectId, ref: 'Tenant', required: true, index: true })
   tenantId: Types.ObjectId;
 
+  @Prop({ type: Types.ObjectId, ref: 'Workspace', index: true })
+  workspaceId?: Types.ObjectId;
+
   @Prop({ type: Types.ObjectId, ref: 'Contact', required: true })
   contactId: Types.ObjectId;
 
@@ -73,6 +76,7 @@ export class Lead {
 export const LeadSchema = SchemaFactory.createForClass(Lead);
 
 LeadSchema.index({ tenantId: 1, status: 1 });
+LeadSchema.index({ tenantId: 1, workspaceId: 1 });
 LeadSchema.index({ tenantId: 1, assignedTo: 1 });
 LeadSchema.index({ tenantId: 1, priority: 1 });
 LeadSchema.index({ tenantId: 1, createdAt: -1 });

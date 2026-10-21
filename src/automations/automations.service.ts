@@ -19,19 +19,26 @@ export class AutomationsService {
     const automation = new this.automationModel({
       ...dto,
       tenantId: new Types.ObjectId(tenantId),
+      workspaceId: dto.workspaceId ? new Types.ObjectId(dto.workspaceId) : undefined,
     });
     return automation.save();
   }
 
-  async findAll(tenantId: string): Promise<Automation[]> {
+  async findAll(tenantId: string, workspaceId?: string): Promise<Automation[]> {
+    const query: any = { tenantId: new Types.ObjectId(tenantId) };
+    if (workspaceId) query.workspaceId = new Types.ObjectId(workspaceId);
+
     return this.automationModel
-      .find({ tenantId: new Types.ObjectId(tenantId) })
+      .find(query)
       .exec();
   }
 
-  async findOne(tenantId: string, id: string): Promise<Automation> {
+  async findOne(tenantId: string, id: string, workspaceId?: string): Promise<Automation> {
+    const query: any = { _id: id, tenantId: new Types.ObjectId(tenantId) };
+    if (workspaceId) query.workspaceId = new Types.ObjectId(workspaceId);
+
     const automation = await this.automationModel
-      .findOne({ _id: id, tenantId: new Types.ObjectId(tenantId) })
+      .findOne(query)
       .exec();
     if (!automation) {
       throw new NotFoundException(`Automation with ID ${id} not found`);
@@ -39,11 +46,17 @@ export class AutomationsService {
     return automation;
   }
 
-  async update(tenantId: string, id: string, dto: UpdateAutomationDto): Promise<Automation> {
+  async update(tenantId: string, id: string, dto: UpdateAutomationDto, workspaceId?: string): Promise<Automation> {
+    const query: any = { _id: id, tenantId: new Types.ObjectId(tenantId) };
+    if (workspaceId) query.workspaceId = new Types.ObjectId(workspaceId);
+
+    const updateData: any = { ...dto };
+    if (dto.workspaceId) updateData.workspaceId = new Types.ObjectId(dto.workspaceId);
+
     const automation = await this.automationModel
       .findOneAndUpdate(
-        { _id: id, tenantId: new Types.ObjectId(tenantId) },
-        dto,
+        query,
+        updateData,
         { returnDocument: 'after' },
       )
       .exec();
@@ -53,22 +66,28 @@ export class AutomationsService {
     return automation;
   }
 
-  async remove(tenantId: string, id: string): Promise<void> {
+  async remove(tenantId: string, id: string, workspaceId?: string): Promise<void> {
+    const query: any = { _id: id, tenantId: new Types.ObjectId(tenantId) };
+    if (workspaceId) query.workspaceId = new Types.ObjectId(workspaceId);
+
     const result = await this.automationModel
-      .findOneAndDelete({ _id: id, tenantId: new Types.ObjectId(tenantId) })
+      .findOneAndDelete(query)
       .exec();
     if (!result) {
       throw new NotFoundException(`Automation with ID ${id} not found`);
     }
   }
 
-  async findByTrigger(tenantId: string, trigger: AutomationTrigger): Promise<Automation[]> {
+  async findByTrigger(tenantId: string, trigger: AutomationTrigger, workspaceId?: string): Promise<Automation[]> {
+    const query: any = {
+      tenantId: new Types.ObjectId(tenantId),
+      trigger,
+      isActive: true,
+    };
+    if (workspaceId) query.workspaceId = new Types.ObjectId(workspaceId);
+
     return this.automationModel
-      .find({
-        tenantId: new Types.ObjectId(tenantId),
-        trigger,
-        isActive: true,
-      })
+      .find(query)
       .exec();
   }
 

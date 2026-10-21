@@ -1,5 +1,5 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { IsArray, IsEmail, IsNotEmpty, IsOptional, IsString, ValidateNested } from 'class-validator';
+import { IsArray, IsEmail, IsMongoId, IsNotEmpty, IsOptional, IsString, ValidateNested } from 'class-validator';
 import { Type } from 'class-transformer';
 
 class EmailRecipient {
@@ -14,6 +14,16 @@ class EmailRecipient {
 }
 
 export class SendEmailDto {
+  @ApiPropertyOptional({ description: 'Mailbox used as sender. Defaults to the default account.' })
+  @IsOptional()
+  @IsMongoId()
+  integrationId?: string;
+
+  @ApiPropertyOptional({ example: '507f1f77bcf86cd799439011' })
+  @IsOptional()
+  @IsString()
+  workspaceId?: string;
+
   @ApiProperty({ type: [EmailRecipient] })
   @IsArray()
   @ValidateNested({ each: true })

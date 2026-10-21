@@ -6,7 +6,10 @@ export type TenantDocument = Tenant & Document;
 export enum TenantPlan {
   FREE = 'free',
   STARTER = 'starter',
+  PRO = 'pro',
   PROFESSIONAL = 'professional',
+  AGENCY = 'agency',
+  BUSINESS = 'business',
   ENTERPRISE = 'enterprise',
 }
 
@@ -15,6 +18,17 @@ export enum TenantStatus {
   SUSPENDED = 'suspended',
   TRIAL = 'trial',
   CANCELLED = 'cancelled',
+  PAST_DUE = 'past_due',
+  LOCKED = 'locked',
+}
+
+export enum SubscriptionStatus {
+  TRIALING = 'trialing',
+  ACTIVE = 'active',
+  PAST_DUE = 'past_due',
+  CANCELED = 'canceled',
+  UNPAID = 'unpaid',
+  PAUSED = 'paused',
 }
 
 @Schema({ timestamps: true })
@@ -38,6 +52,20 @@ export class Tenant {
   trialEndsAt?: Date;
 
   @Prop({ type: Object })
+  subscription?: {
+    planKey: string;
+    status: SubscriptionStatus;
+    billingCycle?: 'monthly' | 'yearly';
+    currentPeriodStart?: Date;
+    currentPeriodEnd?: Date;
+    cancelAtPeriodEnd?: boolean;
+    canceledAt?: Date;
+    provider?: 'manual' | 'stripe';
+    providerCustomerId?: string;
+    providerSubscriptionId?: string;
+  };
+
+  @Prop({ type: Object })
   settings?: {
     timezone?: string;
     language?: string;
@@ -59,8 +87,16 @@ export class Tenant {
   @Prop({ type: Object })
   limits?: {
     maxUsers?: number;
+    maxWorkspaces?: number;
+    maxConnectedAssets?: number;
+    maxSocialAccounts?: number;
+    maxEmailIntegrations?: number;
+    maxWidgets?: number;
     maxConversations?: number;
     maxLeads?: number;
+    automationsEnabled?: boolean;
+    teamRolesEnabled?: boolean;
+    whiteLabelEnabled?: boolean;
   };
 
   @Prop({ default: true })

@@ -29,6 +29,12 @@ export class AllExceptionsFilter implements ExceptionFilter {
       timestamp: new Date().toISOString(),
       path: request.url,
       message: typeof message === 'string' ? message : (message as any).message,
+      // Machine readable error code (e.g. WORKSPACE_REQUIRED) so the client can react
+      ...(typeof message === 'object' && (message as any)?.code ? { code: (message as any).code } : {}),
+      // Optional structured detail (e.g. which of SMTP/IMAP failed when linking a mailbox)
+      ...(typeof message === 'object' && (message as any)?.details !== undefined
+        ? { details: (message as any).details }
+        : {}),
     });
   }
 }

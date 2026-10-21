@@ -9,6 +9,10 @@ import { LoginDto } from './dto/login.dto';
 import { RegisterDto } from './dto/register.dto';
 import { AcceptInviteDto } from '../users/dto/accept-invite.dto';
 import { UserRole } from '../users/entities/user.entity';
+import { WorkspacesService } from '../workspaces/workspaces.service';
+import { MembershipsService } from '../memberships/memberships.service';
+import { AccountRole } from '../memberships/entities/account-member.entity';
+import { BillingService } from '../billing/billing.service';
 
 @Injectable()
 export class AuthService {
@@ -16,19 +20,44 @@ export class AuthService {
     private usersService: UsersService,
     private tenantsService: TenantsService,
     private invitationsService: InvitationsService,
+    private workspacesService: WorkspacesService,
+    private membershipsService: MembershipsService,
+    private billingService: BillingService,
     private jwtService: JwtService,
     private configService: ConfigService,
   ) {}
+
+  private toAccountRole(role: string): AccountRole {
+    if (role === UserRole.ADMIN) return AccountRole.ADMIN;
+    if (role === UserRole.MANAGER) return AccountRole.MANAGER;
+    if (role === UserRole.AGENT) return AccountRole.AGENT;
+    return AccountRole.VIEWER;
+  }
 
   async register(registerDto: RegisterDto) {
     const slug =
       registerDto.companySlug ||
       registerDto.companyName.toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '');
 
+    const initialBilling = this.billingService.buildInitialSubscription(
+      registerDto.planKey || 'starter',
+      registerDto.billingCycle || 'monthly',
+    );
+
     const tenant = await this.tenantsService.create({
       name: registerDto.companyName,
       slug,
+      plan: initialBilling.plan.key as any,
+      billingCycle: registerDto.billingCycle || 'monthly',
     });
+
+    await this.tenantsService.update((tenant as any)._id.toString(), {
+      plan: initialBilling.plan.key as any,
+      status: initialBilling.tenantStatus as any,
+      trialEndsAt: initialBilling.trialEndsAt,
+      limits: initialBilling.plan.limits,
+      subscription: initialBilling.subscription,
+    } as any);
 
     const user = await this.usersService.create({
       email: registerDto.email,
@@ -37,6 +66,17 @@ export class AuthService {
       lastName: registerDto.lastName,
       tenantId: (tenant as any)._id.toString(),
       role: UserRole.ADMIN,
+    });
+
+    const tenantId = (tenant as any)._id.toString();
+    const userId = (user as any)._id.toString();
+
+    // No workspace is created here on purpose: a new account starts with only the user's own
+    // data (profile, plan) and creates its first company/workspace from the onboarding screen.
+    await this.membershipsService.ensureAccountMember({
+      tenantId,
+      userId,
+      role: AccountRole.OWNER,
     });
 
     const payload = {
@@ -122,23 +162,48 @@ export class AuthService {
   async acceptInvite(acceptInviteDto: AcceptInviteDto) {
     const invitation = await this.invitationsService.findByToken(acceptInviteDto.token);
 
-    const existingUser = await this.usersService.findByEmail(invitation.email);
-    if (existingUser) {
-      throw new BadRequestException('User with this email already exists');
+    let user = await this.usersService.findByEmail(invitation.email);
+    const tenantId = (invitation.tenantId as any)._id?.toString() || invitation.tenantId.toString();
+
+    if (!user) {
+      user = await this.usersService.create({
+        email: invitation.email,
+        password: acceptInviteDto.password,
+        firstName: invitation.firstName,
+        lastName: invitation.lastName,
+        tenantId,
+        role: invitation.role as UserRole,
+      });
     }
 
-    const user = await this.usersService.create({
-      email: invitation.email,
-      password: acceptInviteDto.password,
-      firstName: invitation.firstName,
-      lastName: invitation.lastName,
-      tenantId: (invitation.tenantId as any)._id?.toString() || invitation.tenantId.toString(),
-      role: invitation.role as UserRole,
+    const userId = (user as any)._id.toString();
+    const accountRole = this.toAccountRole(invitation.role);
+
+    await this.membershipsService.ensureAccountMember({
+      tenantId,
+      userId,
+      role: accountRole,
+      invitedBy: (invitation.invitedBy as any)?.toString(),
     });
+
+    // Invited users only get the workspaces chosen in the invitation (owners/admins see all anyway)
+    const workspaceIds = (invitation.workspaceIds || []).map((id: any) => id.toString());
+
+    await Promise.all(
+      workspaceIds.map((workspaceId) =>
+        this.membershipsService.setWorkspaceAccess({
+          tenantId,
+          userId,
+          workspaceId,
+          role: accountRole,
+          permissions: invitation.permissions || [],
+        }),
+      ),
+    );
 
     await this.invitationsService.markAsAccepted(
       (invitation as any)._id.toString(),
-      (user as any)._id.toString(),
+      userId,
     );
 
     const payload = {
@@ -163,7 +228,7 @@ export class AuthService {
     };
   }
 
-  async refreshTokens(userId: string) {
+  async refreshTokens(userId: string, activeTenantId?: string, activeRole?: string) {
     const user = await this.usersService.findOne(userId);
     
     if (!user) {
@@ -173,8 +238,8 @@ export class AuthService {
     const payload = {
       email: user.email,
       sub: (user as any)._id,
-      tenantId: user.tenantId,
-      role: user.role,
+      tenantId: activeTenantId || user.tenantId,
+      role: activeRole || user.role,
     };
 
     const accessTokenSecret = this.configService.get<string>('jwt.secret');
@@ -184,6 +249,32 @@ export class AuthService {
         secret: accessTokenSecret,
         expiresIn: '1h',
       } as any),
+    };
+  }
+
+  async switchAccount(userId: string, tenantId: string) {
+    const user = await this.usersService.findOne(userId);
+    const membership = await this.membershipsService.findActiveAccountMember(tenantId, userId);
+
+    const payload = {
+      email: user.email,
+      sub: (user as any)._id,
+      tenantId,
+      role: membership.role,
+    };
+
+    const tokens = this.generateTokens(payload);
+
+    return {
+      ...tokens,
+      user: {
+        id: (user as any)._id,
+        email: user.email,
+        firstName: user.firstName,
+        lastName: user.lastName,
+        role: membership.role,
+        tenantId,
+      },
     };
   }
 }

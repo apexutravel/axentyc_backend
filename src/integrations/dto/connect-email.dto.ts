@@ -1,7 +1,23 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { IsBoolean, IsEmail, IsInt, IsNotEmpty, IsOptional, IsString, Max, Min } from 'class-validator';
+import { IsBoolean, IsInt, IsMongoId, IsNotEmpty, IsOptional, IsString, Max, MaxLength, Min } from 'class-validator';
 
 export class ConnectEmailDto {
+  @ApiPropertyOptional({ example: '507f1f77bcf86cd799439011' })
+  @IsOptional()
+  @IsString()
+  workspaceId?: string;
+
+  @ApiPropertyOptional({ description: 'Existing mailbox to update / test with stored passwords' })
+  @IsOptional()
+  @IsMongoId()
+  integrationId?: string;
+
+  @ApiPropertyOptional({ example: 'Ventas' })
+  @IsOptional()
+  @IsString()
+  @MaxLength(60)
+  label?: string;
+
   // SMTP
   @ApiProperty()
   @IsString()

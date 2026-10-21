@@ -2,6 +2,11 @@ import { IsString, IsBoolean, IsOptional, IsArray, IsHexColor, IsIn } from 'clas
 import { ApiPropertyOptional } from '@nestjs/swagger';
 
 export class UpdateWidgetConfigDto {
+  @ApiPropertyOptional({ example: '507f1f77bcf86cd799439011' })
+  @IsOptional()
+  @IsString()
+  workspaceId?: string;
+
   @ApiPropertyOptional()
   @IsOptional()
   @IsBoolean()

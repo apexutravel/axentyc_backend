@@ -27,6 +27,12 @@ export class Invitation {
   @Prop({ required: true })
   role: string;
 
+  @Prop({ type: [Types.ObjectId], ref: 'Workspace', default: [] })
+  workspaceIds: Types.ObjectId[];
+
+  @Prop({ type: [String], default: [] })
+  permissions: string[];
+
   @Prop({ required: true, unique: true })
   token: string;
 

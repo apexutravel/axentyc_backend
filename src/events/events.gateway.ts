@@ -10,13 +10,17 @@ import {
 } from '@nestjs/websockets';
 import { Server, Socket } from 'socket.io';
 import { Logger } from '@nestjs/common';
+import { InjectModel } from '@nestjs/mongoose';
+import { Model, Types } from 'mongoose';
+import { JwtService } from '@nestjs/jwt';
+import { Conversation, ConversationDocument } from '../conversations/entities/conversation.entity';
 import { createAdapter } from '@socket.io/redis-adapter';
 import { createClient } from 'redis';
 import { ConfigService } from '@nestjs/config';
 
 @WebSocketGateway({
   cors: {
-    origin: [process.env.CORS_ORIGIN || 'http://localhost:3000', '*'],
+    origin: [process.env.CORS_ORIGIN || 'http://localhost:3000'],
     credentials: true,
   },
   namespace: '/',
@@ -28,7 +32,55 @@ export class EventsGateway implements OnGatewayInit, OnGatewayConnection, OnGate
   private readonly logger = new Logger(EventsGateway.name);
   private activeAdminConversations = new Map<string, Set<string>>(); // conversationId -> Set of socketIds
 
-  constructor(private configService: ConfigService) {}
+  constructor(
+    private configService: ConfigService,
+    private jwtService: JwtService,
+    @InjectModel(Conversation.name)
+    private conversationModel: Model<ConversationDocument>,
+  ) {}
+
+  // Authenticated agents carry the HttpOnly `access_token` cookie on the handshake.
+  // Anonymous sockets (public chat-widget visitors) are allowed but cannot join tenant/admin rooms.
+  private authenticate(client: Socket): { sub: string; tenantId: string } | null {
+    try {
+      const rawCookie = client.handshake.headers?.cookie;
+      if (!rawCookie) return null;
+      const cookies: Record<string, string> = {};
+      for (const part of rawCookie.split(';')) {
+        const idx = part.indexOf('=');
+        if (idx < 0) continue;
+        cookies[part.slice(0, idx).trim()] = decodeURIComponent(part.slice(idx + 1).trim());
+      }
+      const token = cookies['access_token'];
+      if (!token) return null;
+      const payload: any = this.jwtService.verify(token, {
+        secret: this.configService.get<string>('jwt.secret') || 'default-secret',
+      });
+      if (!payload?.sub || !payload?.tenantId) return null;
+      return { sub: String(payload.sub), tenantId: String(payload.tenantId) };
+    } catch {
+      return null;
+    }
+  }
+
+  private getUser(client: Socket): { sub: string; tenantId: string } | null {
+    return (client.data?.user as { sub: string; tenantId: string }) || null;
+  }
+
+  private denyAuth(client: Socket, reason: string) {
+    // Lets the frontend refresh its session and reconnect with a valid cookie
+    client.emit('auth:error', { reason });
+    return { success: false, error: reason };
+  }
+
+  private async conversationBelongsToTenant(conversationId: string, tenantId: string): Promise<boolean> {
+    if (!Types.ObjectId.isValid(conversationId) || !Types.ObjectId.isValid(tenantId)) return false;
+    const found = await this.conversationModel.exists({
+      _id: new Types.ObjectId(conversationId),
+      tenantId: new Types.ObjectId(tenantId),
+    });
+    return !!found;
+  }
 
   async afterInit(server: Server) {
     const redisHost = this.configService.get<string>('REDIS_HOST') || 'localhost';
@@ -55,7 +107,9 @@ export class EventsGateway implements OnGatewayInit, OnGatewayConnection, OnGate
   }
 
   handleConnection(client: Socket) {
-    this.logger.log(`Client connected: ${client.id}`);
+    const user = this.authenticate(client);
+    client.data.user = user;
+    this.logger.log(`Client connected: ${client.id} (${user ? 'authenticated' : 'anonymous'})`);
   }
 
   handleDisconnect(client: Socket) {
@@ -73,13 +127,27 @@ export class EventsGateway implements OnGatewayInit, OnGatewayConnection, OnGate
 
   @SubscribeMessage('join:tenant')
   handleJoinTenant(client: Socket, tenantId: string) {
-    client.join(`tenant:${tenantId}`);
-    this.logger.log(`Client ${client.id} joined tenant room: ${tenantId}`);
+    const user = this.getUser(client);
+    if (!user) return this.denyAuth(client, 'unauthenticated');
+    // Always join the tenant of the authenticated session, never a client-supplied one
+    if (tenantId && String(tenantId) !== user.tenantId) {
+      this.logger.warn(`Client ${client.id} tried to join foreign tenant room`);
+      return this.denyAuth(client, 'tenant_mismatch');
+    }
+    client.join(`tenant:${user.tenantId}`);
+    this.logger.log(`Client ${client.id} joined tenant room: ${user.tenantId}`);
+    return { success: true };
   }
 
   @SubscribeMessage('join:conversation')
-  handleJoinConversation(client: Socket, conversationId: string) {
+  async handleJoinConversation(client: Socket, conversationId: string) {
+    const user = this.getUser(client);
+    if (!user) return this.denyAuth(client, 'unauthenticated');
+    if (!(await this.conversationBelongsToTenant(conversationId, user.tenantId))) {
+      return { success: false, error: 'forbidden' };
+    }
     client.join(`conversation:${conversationId}`);
+    return { success: true };
   }
 
   @SubscribeMessage('leave:conversation')
@@ -157,10 +225,16 @@ export class EventsGateway implements OnGatewayInit, OnGatewayConnection, OnGate
   }
 
   @SubscribeMessage('admin:join:widget')
-  handleAdminJoinWidget(
+  async handleAdminJoinWidget(
     @ConnectedSocket() client: Socket,
     @MessageBody() data: { conversationId: string },
   ) {
+    const user = this.getUser(client);
+    if (!user) return this.denyAuth(client, 'unauthenticated');
+    if (!data?.conversationId || !(await this.conversationBelongsToTenant(data.conversationId, user.tenantId))) {
+      return { success: false, error: 'forbidden' };
+    }
+
     client.join(`admin:conversation:${data.conversationId}`);
     
     // Track active admin viewers
@@ -172,7 +246,7 @@ export class EventsGateway implements OnGatewayInit, OnGatewayConnection, OnGate
     this.logger.log(`Admin joined widget conversation: ${data.conversationId}`);
     
     // Emit event to mark conversation as being actively viewed
-    this.server.emit('admin:viewing:conversation', { conversationId: data.conversationId });
+    this.emitToTenant(user.tenantId, 'admin:viewing:conversation', { conversationId: data.conversationId });
     
     return { success: true };
   }
@@ -208,6 +282,7 @@ export class EventsGateway implements OnGatewayInit, OnGatewayConnection, OnGate
       isTyping: boolean;
     },
   ) {
+    if (!this.getUser(client)) return this.denyAuth(client, 'unauthenticated');
     if (!data?.widgetId || !data?.visitorId) return { success: false };
     this.server.to(`widget:${data.widgetId}:${data.visitorId}`).emit('widget:typing', {
       conversationId: data.conversationId,

@@ -5,8 +5,11 @@ export type WidgetConfigDocument = WidgetConfig & Document;
 
 @Schema({ timestamps: true })
 export class WidgetConfig {
-  @Prop({ type: Types.ObjectId, ref: 'Tenant', required: true, unique: true, index: true })
+  @Prop({ type: Types.ObjectId, ref: 'Tenant', required: true, index: true })
   tenantId: Types.ObjectId;
+
+  @Prop({ type: Types.ObjectId, ref: 'Workspace', index: true })
+  workspaceId?: Types.ObjectId;
 
   @Prop({ type: String, required: true, unique: true })
   widgetId: string;
@@ -78,3 +81,5 @@ export class WidgetConfig {
 }
 
 export const WidgetConfigSchema = SchemaFactory.createForClass(WidgetConfig);
+
+WidgetConfigSchema.index({ tenantId: 1, workspaceId: 1 });

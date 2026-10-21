@@ -19,6 +19,9 @@ export class Contact {
   @Prop({ type: Types.ObjectId, ref: 'Tenant', required: true, index: true })
   tenantId: Types.ObjectId;
 
+  @Prop({ type: Types.ObjectId, ref: 'Workspace', index: true })
+  workspaceId?: Types.ObjectId;
+
   @Prop({ required: true })
   name: string;
 
@@ -67,6 +70,7 @@ export class Contact {
 export const ContactSchema = SchemaFactory.createForClass(Contact);
 
 ContactSchema.index({ tenantId: 1, email: 1 });
+ContactSchema.index({ tenantId: 1, workspaceId: 1 });
 ContactSchema.index({ tenantId: 1, phone: 1 });
 ContactSchema.index({ tenantId: 1, tags: 1 });
 ContactSchema.index({ tenantId: 1, source: 1 });

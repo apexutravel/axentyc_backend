@@ -29,11 +29,12 @@ export class JwtStrategy extends PassportStrategy(Strategy, 'jwt') {
     }
     return {
       _id: payload.sub,
+      sub: payload.sub,
       email: user.email,
       firstName: user.firstName,
       lastName: user.lastName,
-      role: user.role,
-      tenantId: user.tenantId?.toString(),
+      role: payload.role || user.role,
+      tenantId: payload.tenantId?.toString() || user.tenantId?.toString(),
       isActive: user.isActive,
     };
   }

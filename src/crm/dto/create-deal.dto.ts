@@ -14,6 +14,11 @@ import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { DealStage } from '../entities/deal.entity';
 
 export class CreateDealDto {
+  @ApiPropertyOptional({ example: '507f1f77bcf86cd799439011' })
+  @IsString()
+  @IsOptional()
+  workspaceId?: string;
+
   @ApiProperty({ example: '60d5f484f1a2c8b1f8e4e1a2' })
   @IsString()
   @IsNotEmpty()

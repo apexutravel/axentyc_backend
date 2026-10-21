@@ -17,6 +17,9 @@ export class Deal {
   @Prop({ type: Types.ObjectId, ref: 'Tenant', required: true, index: true })
   tenantId: Types.ObjectId;
 
+  @Prop({ type: Types.ObjectId, ref: 'Workspace', index: true })
+  workspaceId?: Types.ObjectId;
+
   @Prop({ type: Types.ObjectId, ref: 'Contact', required: true })
   contactId: Types.ObjectId;
 
@@ -69,6 +72,7 @@ export class Deal {
 export const DealSchema = SchemaFactory.createForClass(Deal);
 
 DealSchema.index({ tenantId: 1, stage: 1 });
+DealSchema.index({ tenantId: 1, workspaceId: 1 });
 DealSchema.index({ tenantId: 1, assignedTo: 1 });
 DealSchema.index({ tenantId: 1, value: -1 });
 DealSchema.index({ tenantId: 1, expectedCloseDate: 1 });

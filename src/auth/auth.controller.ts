@@ -56,7 +56,11 @@ export class AuthController {
     @Req() req: Request,
     @Res({ passthrough: true }) res: Response,
   ) {
-    const { access_token } = await this.authService.refreshTokens(req.user?.['sub']);
+    const { access_token } = await this.authService.refreshTokens(
+      req.user?.['sub'],
+      req.user?.['tenantId'],
+      req.user?.['role'],
+    );
     
     res.cookie('access_token', access_token, {
       httpOnly: true,
@@ -82,6 +86,24 @@ export class AuthController {
     res.clearCookie('access_token');
     res.clearCookie('refresh_token');
     return { success: true };
+  }
+
+  @Post('switch-account')
+  @HttpCode(200)
+  @ApiOperation({ summary: 'Switch active account for current user' })
+  async switchAccount(
+    @CurrentUser() user: any,
+    @Body('tenantId') tenantId: string,
+    @Res({ passthrough: true }) res: Response,
+  ) {
+    const { access_token, refresh_token, user: switchedUser } = await this.authService.switchAccount(
+      user._id || user.sub,
+      tenantId,
+    );
+
+    this.setAuthCookies(res, access_token, refresh_token);
+
+    return { user: switchedUser };
   }
 
   @Public()

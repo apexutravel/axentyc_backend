@@ -12,4 +12,14 @@ export class RegisterDto extends CreateUserDto {
   @IsString()
   @IsOptional()
   companySlug?: string;
+
+  @ApiPropertyOptional({ example: 'starter' })
+  @IsString()
+  @IsOptional()
+  planKey?: string;
+
+  @ApiPropertyOptional({ example: 'monthly' })
+  @IsString()
+  @IsOptional()
+  billingCycle?: 'monthly' | 'yearly';
 }

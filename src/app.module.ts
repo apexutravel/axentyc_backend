@@ -18,6 +18,10 @@ import { FirebaseAdminModule } from './firebase/firebase-admin.module';
 import { UploadModule } from './upload/upload.module';
 import { EmailsModule } from './emails/emails.module';
 import { FacebookModule } from './facebook/facebook.module';
+import { WorkspacesModule } from './workspaces/workspaces.module';
+import { WorkspaceScopeGuard } from './workspaces/workspace-scope.guard';
+import { MembershipsModule } from './memberships/memberships.module';
+import { BillingModule } from './billing/billing.module';
 import { JwtAuthGuard } from './auth/guards/jwt-auth.guard';
 import { RolesGuard } from './common/guards/roles.guard';
 import { AllExceptionsFilter } from './common/filters/http-exception.filter';
@@ -53,6 +57,9 @@ import jwtConfig from './config/jwt.config';
     UploadModule,
     EmailsModule,
     FacebookModule,
+    WorkspacesModule,
+    MembershipsModule,
+    BillingModule,
   ],
   controllers: [AppController],
   providers: [
@@ -64,6 +71,11 @@ import jwtConfig from './config/jwt.config';
     {
       provide: APP_GUARD,
       useClass: RolesGuard,
+    },
+    {
+      // Must stay after JwtAuthGuard: it relies on request.user
+      provide: APP_GUARD,
+      useClass: WorkspaceScopeGuard,
     },
     {
       provide: APP_FILTER,

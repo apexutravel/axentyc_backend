@@ -32,6 +32,9 @@ export class Message {
   @Prop({ type: Types.ObjectId, ref: 'Tenant', required: true, index: true })
   tenantId: Types.ObjectId;
 
+  @Prop({ type: Types.ObjectId, ref: 'Workspace', index: true })
+  workspaceId?: Types.ObjectId;
+
   @Prop({ type: Types.ObjectId, ref: 'Conversation', required: true, index: true })
   conversationId: Types.ObjectId;
 
@@ -83,4 +86,5 @@ export class Message {
 export const MessageSchema = SchemaFactory.createForClass(Message);
 
 MessageSchema.index({ conversationId: 1, createdAt: -1 });
+MessageSchema.index({ tenantId: 1, workspaceId: 1, createdAt: -1 });
 MessageSchema.index({ tenantId: 1, createdAt: -1 });

@@ -8,6 +8,13 @@ export class EmailMessage {
   @Prop({ type: Types.ObjectId, ref: 'Tenant', required: true, index: true })
   tenantId: Types.ObjectId;
 
+  @Prop({ type: Types.ObjectId, ref: 'Workspace', index: true })
+  workspaceId?: Types.ObjectId;
+
+  // Mailbox (EmailIntegration) this message belongs to. IMAP UIDs are only unique per mailbox.
+  @Prop({ type: Types.ObjectId, ref: 'EmailIntegration', index: true })
+  integrationId?: Types.ObjectId;
+
   @Prop({ required: true, index: true })
   messageId: string; // IMAP UID or Message-ID header
 
@@ -94,5 +101,8 @@ export const EmailMessageSchema = SchemaFactory.createForClass(EmailMessage);
 
 // Indexes for performance
 EmailMessageSchema.index({ tenantId: 1, folder: 1, date: -1 });
-EmailMessageSchema.index({ tenantId: 1, messageId: 1, folder: 1 }, { unique: true });
+EmailMessageSchema.index({ tenantId: 1, workspaceId: 1, date: -1 });
+// IMAP UIDs repeat across mailboxes, so uniqueness is per mailbox (integration)
+EmailMessageSchema.index({ tenantId: 1, integrationId: 1, messageId: 1, folder: 1 }, { unique: true });
+EmailMessageSchema.index({ tenantId: 1, integrationId: 1, folder: 1, date: -1 });
 EmailMessageSchema.index({ tenantId: 1, threadId: 1 });

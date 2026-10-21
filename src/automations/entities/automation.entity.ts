@@ -30,6 +30,9 @@ export class Automation {
   @Prop({ type: Types.ObjectId, ref: 'Tenant', required: true, index: true })
   tenantId: Types.ObjectId;
 
+  @Prop({ type: Types.ObjectId, ref: 'Workspace', index: true })
+  workspaceId?: Types.ObjectId;
+
   @Prop({ required: true })
   name: string;
 
@@ -75,3 +78,4 @@ export class Automation {
 export const AutomationSchema = SchemaFactory.createForClass(Automation);
 
 AutomationSchema.index({ tenantId: 1, trigger: 1, isActive: 1 });
+AutomationSchema.index({ tenantId: 1, workspaceId: 1 });

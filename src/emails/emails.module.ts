@@ -5,12 +5,14 @@ import { EmailsService } from './emails.service';
 import { EmailMessage, EmailMessageSchema } from './entities/email-message.entity';
 import { IntegrationsModule } from '../integrations/integrations.module';
 import { EventsModule } from '../events/events.module';
+import { MembershipsModule } from '../memberships/memberships.module';
 
 @Module({
   imports: [
     MongooseModule.forFeature([
       { name: EmailMessage.name, schema: EmailMessageSchema },
     ]),
+    MembershipsModule,
     forwardRef(() => IntegrationsModule),
     EventsModule,
   ],

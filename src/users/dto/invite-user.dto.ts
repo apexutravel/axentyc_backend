@@ -1,5 +1,5 @@
-import { IsEmail, IsString, IsNotEmpty, IsEnum } from 'class-validator';
-import { ApiProperty } from '@nestjs/swagger';
+import { ArrayUnique, IsArray, IsEmail, IsString, IsNotEmpty, IsEnum, IsOptional } from 'class-validator';
+import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { UserRole } from '../entities/user.entity';
 
 export class InviteUserDto {
@@ -22,4 +22,18 @@ export class InviteUserDto {
   @IsEnum(UserRole)
   @IsNotEmpty()
   role: UserRole;
+
+  @ApiPropertyOptional({ example: ['507f1f77bcf86cd799439011'] })
+  @IsArray()
+  @ArrayUnique()
+  @IsString({ each: true })
+  @IsOptional()
+  workspaceIds?: string[];
+
+  @ApiPropertyOptional({ example: ['conversations:reply', 'contacts:update'] })
+  @IsArray()
+  @ArrayUnique()
+  @IsString({ each: true })
+  @IsOptional()
+  permissions?: string[];
 }

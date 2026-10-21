@@ -13,6 +13,7 @@ import { EventsGateway } from '../events/events.gateway';
 import { FirebaseAdminService } from '../firebase/firebase-admin.service';
 import { UsersService } from '../users/users.service';
 import { extractContactInfo, hasExtractedInfo, extractSubject } from '../common/utils/contact-info-extractor';
+import { BillingService } from '../billing/billing.service';
 
 @Injectable()
 export class ChatWidgetService {
@@ -24,13 +25,19 @@ export class ChatWidgetService {
     private configService: ConfigService,
     private firebaseAdminService: FirebaseAdminService,
     private usersService: UsersService,
+    private billingService: BillingService,
   ) {}
 
   async createWidgetConfig(
     tenantId: string,
     createDto: CreateWidgetConfigDto,
   ): Promise<WidgetConfig> {
-    const existing = await this.widgetConfigModel.findOne({ tenantId: new Types.ObjectId(tenantId) });
+    await this.billingService.assertCanCreateWidget(tenantId, createDto.workspaceId);
+
+    const query: any = { tenantId: new Types.ObjectId(tenantId) };
+    if (createDto.workspaceId) query.workspaceId = new Types.ObjectId(createDto.workspaceId);
+
+    const existing = await this.widgetConfigModel.findOne(query);
     
     if (existing) {
       throw new BadRequestException('Widget configuration already exists for this tenant');
@@ -40,6 +47,7 @@ export class ChatWidgetService {
 
     const widgetConfig = new this.widgetConfigModel({
       tenantId: new Types.ObjectId(tenantId),
+      workspaceId: createDto.workspaceId ? new Types.ObjectId(createDto.workspaceId) : undefined,
       widgetId,
       ...createDto,
     });
@@ -51,32 +59,44 @@ export class ChatWidgetService {
     tenantId: string,
     dto: UpdateWidgetConfigDto,
   ): Promise<WidgetConfig> {
-    const existing = await this.widgetConfigModel.findOne({ tenantId: new Types.ObjectId(tenantId) });
+    const query: any = { tenantId: new Types.ObjectId(tenantId) };
+    if (dto.workspaceId) query.workspaceId = new Types.ObjectId(dto.workspaceId);
 
-    const plain = Object.fromEntries(
+    const existing = await this.widgetConfigModel.findOne(query);
+
+    const plain: any = Object.fromEntries(
       Object.entries({ ...dto }).filter(([, v]) => v !== undefined),
     );
+    if (plain.workspaceId) {
+      plain.workspaceId = new Types.ObjectId(plain.workspaceId as string);
+    }
 
     if (existing) {
       const updated = await this.widgetConfigModel.findOneAndUpdate(
-        { tenantId: new Types.ObjectId(tenantId) },
+        query,
         { $set: plain },
         { returnDocument: 'after' },
       );
       return updated!;
     }
 
+    await this.billingService.assertCanCreateWidget(tenantId, dto.workspaceId);
+
     const widgetId = this.generateWidgetId();
     const widgetConfig = new this.widgetConfigModel({
       tenantId: new Types.ObjectId(tenantId),
+      workspaceId: plain.workspaceId,
       widgetId,
       ...plain,
     });
     return widgetConfig.save();
   }
 
-  async getWidgetConfig(tenantId: string): Promise<WidgetConfig> {
-    const config = await this.widgetConfigModel.findOne({ tenantId: new Types.ObjectId(tenantId) });
+  async getWidgetConfig(tenantId: string, workspaceId?: string): Promise<WidgetConfig> {
+    const query: any = { tenantId: new Types.ObjectId(tenantId) };
+    if (workspaceId) query.workspaceId = new Types.ObjectId(workspaceId);
+
+    const config = await this.widgetConfigModel.findOne(query);
     
     if (!config) {
       throw new NotFoundException('Widget configuration not found');
@@ -85,8 +105,11 @@ export class ChatWidgetService {
     return config;
   }
 
-  async getWidgetConfigOrNull(tenantId: string): Promise<WidgetConfig | null> {
-    return this.widgetConfigModel.findOne({ tenantId: new Types.ObjectId(tenantId) });
+  async getWidgetConfigOrNull(tenantId: string, workspaceId?: string): Promise<WidgetConfig | null> {
+    const query: any = { tenantId: new Types.ObjectId(tenantId) };
+    if (workspaceId) query.workspaceId = new Types.ObjectId(workspaceId);
+
+    return this.widgetConfigModel.findOne(query);
   }
 
   async getWidgetConfigByWidgetId(widgetId: string): Promise<WidgetConfig> {
@@ -160,12 +183,14 @@ export class ChatWidgetService {
     let conversation = await this.conversationsService.findByWidgetVisitor(
       config.tenantId.toString(),
       visitorId,
+      (config as any).workspaceId?.toString(),
     );
 
     if (!conversation) {
       // Always create contact - simpler and more reliable
       const contact = await this.conversationsService.createWidgetContact(
         config.tenantId.toString(),
+        (config as any).workspaceId?.toString(),
         visitorId,
         visitorData,
       );
@@ -173,6 +198,7 @@ export class ChatWidgetService {
       conversation = await this.conversationsService.create(
         config.tenantId.toString(),
         {
+          workspaceId: (config as any).workspaceId?.toString(),
           contactId: (contact as any)._id.toString(),
           channel: ConversationChannel.WEB_CHAT,
           subject: `Chat Widget - ${visitorData?.name || visitorId}`,
@@ -261,6 +287,7 @@ export class ChatWidgetService {
     const conversation = await this.conversationsService.findByWidgetVisitor(
       config.tenantId.toString(),
       visitorId,
+      (config as any).workspaceId?.toString(),
     );
 
     if (!conversation) {
@@ -276,6 +303,7 @@ export class ChatWidgetService {
     const conversation = await this.conversationsService.findByWidgetVisitor(
       config.tenantId.toString(),
       visitorId,
+      (config as any).workspaceId?.toString(),
     );
 
     if (!conversation) {

@@ -3,6 +3,11 @@ import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { SocialPlatform } from '../entities/social-account.entity';
 
 export class ConnectSocialDto {
+  @ApiPropertyOptional({ example: '507f1f77bcf86cd799439011' })
+  @IsString()
+  @IsOptional()
+  workspaceId?: string;
+
   @ApiProperty({ enum: SocialPlatform })
   @IsEnum(SocialPlatform)
   @IsNotEmpty()

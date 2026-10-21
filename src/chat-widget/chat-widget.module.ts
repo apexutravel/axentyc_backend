@@ -5,6 +5,8 @@ import { ChatWidgetController } from './chat-widget.controller';
 import { WidgetConfig, WidgetConfigSchema } from './entities/widget-config.entity';
 import { ConversationsModule } from '../conversations/conversations.module';
 import { UsersModule } from '../users/users.module';
+import { BillingModule } from '../billing/billing.module';
+import { MembershipsModule } from '../memberships/memberships.module';
 
 @Module({
   imports: [
@@ -13,6 +15,8 @@ import { UsersModule } from '../users/users.module';
     ]),
     ConversationsModule,
     UsersModule,
+    BillingModule,
+    MembershipsModule,
   ],
   controllers: [ChatWidgetController],
   providers: [ChatWidgetService],

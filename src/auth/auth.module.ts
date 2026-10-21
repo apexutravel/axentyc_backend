@@ -6,6 +6,9 @@ import { AuthService } from './auth.service';
 import { AuthController } from './auth.controller';
 import { UsersModule } from '../users/users.module';
 import { TenantsModule } from '../tenants/tenants.module';
+import { WorkspacesModule } from '../workspaces/workspaces.module';
+import { MembershipsModule } from '../memberships/memberships.module';
+import { BillingModule } from '../billing/billing.module';
 import { JwtStrategy } from './strategies/jwt.strategy';
 import { RefreshTokenStrategy } from './strategies/refresh-token.strategy';
 
@@ -13,6 +16,9 @@ import { RefreshTokenStrategy } from './strategies/refresh-token.strategy';
   imports: [
     UsersModule,
     TenantsModule,
+    WorkspacesModule,
+    MembershipsModule,
+    BillingModule,
     PassportModule,
     JwtModule.registerAsync({
       imports: [ConfigModule],

@@ -14,16 +14,21 @@ import { CreateConversationDto } from './dto/create-conversation.dto';
 import { UpdateConversationDto } from './dto/update-conversation.dto';
 import { SendMessageDto } from './dto/send-message.dto';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
+import { MembershipsService } from '../memberships/memberships.service';
 
 @ApiTags('conversations')
 @ApiBearerAuth()
 @Controller('conversations')
 export class ConversationsController {
-  constructor(private readonly conversationsService: ConversationsService) {}
+  constructor(
+    private readonly conversationsService: ConversationsService,
+    private readonly membershipsService: MembershipsService,
+  ) {}
 
   @Post()
   @ApiOperation({ summary: 'Create a new conversation' })
-  create(@CurrentUser() user: any, @Body() dto: CreateConversationDto) {
+  async create(@CurrentUser() user: any, @Body() dto: CreateConversationDto) {
+    await this.membershipsService.assertCanAccessWorkspace(user.tenantId, user._id || user.sub, dto.workspaceId);
     return this.conversationsService.create(user.tenantId, dto);
   }
 
@@ -33,49 +38,59 @@ export class ConversationsController {
   @ApiQuery({ name: 'channel', required: false })
   @ApiQuery({ name: 'channels', required: false, description: 'Comma-separated list of channels' })
   @ApiQuery({ name: 'assignedTo', required: false })
-  findAll(
+  @ApiQuery({ name: 'workspaceId', required: false })
+  async findAll(
     @CurrentUser() user: any,
     @Query('status') status?: string,
     @Query('channel') channel?: string,
     @Query('channels') channels?: string,
     @Query('assignedTo') assignedTo?: string,
+    @Query('workspaceId') workspaceId?: string,
   ) {
+    await this.membershipsService.assertCanAccessWorkspace(user.tenantId, user._id || user.sub, workspaceId);
     return this.conversationsService.findAll(user.tenantId, {
       status,
       channel,
       channels,
       assignedTo,
+      workspaceId,
     });
   }
 
   @Get(':id')
   @ApiOperation({ summary: 'Get a conversation by ID' })
-  findOne(@CurrentUser() user: any, @Param('id') id: string) {
-    return this.conversationsService.findOne(user.tenantId, id);
+  async findOne(@CurrentUser() user: any, @Param('id') id: string, @Query('workspaceId') workspaceId?: string) {
+    await this.membershipsService.assertCanAccessWorkspace(user.tenantId, user._id || user.sub, workspaceId);
+    return this.conversationsService.findOne(user.tenantId, id, workspaceId);
   }
 
   @Patch(':id')
   @ApiOperation({ summary: 'Update a conversation (status, assign, tags)' })
-  update(
+  async update(
     @CurrentUser() user: any,
     @Param('id') id: string,
     @Body() dto: UpdateConversationDto,
+    @Query('workspaceId') workspaceId?: string,
   ) {
-    return this.conversationsService.update(user.tenantId, id, dto);
+    await this.membershipsService.assertCanAccessWorkspace(user.tenantId, user._id || user.sub, workspaceId);
+    return this.conversationsService.update(user.tenantId, id, dto, workspaceId);
   }
 
   @Post(':id/messages')
   @ApiOperation({ summary: 'Send a message in a conversation' })
-  sendMessage(
+  async sendMessage(
     @CurrentUser() user: any,
     @Param('id') id: string,
     @Body() dto: SendMessageDto,
+    @Query('workspaceId') workspaceId?: string,
   ) {
+    await this.membershipsService.assertCanAccessWorkspace(user.tenantId, user._id || user.sub, workspaceId);
     return this.conversationsService.sendMessage(
       user.tenantId,
       id,
       (user as any)._id,
       dto,
+      workspaceId,
     );
   }
 
@@ -83,29 +98,34 @@ export class ConversationsController {
   @ApiOperation({ summary: 'Get messages for a conversation' })
   @ApiQuery({ name: 'page', required: false })
   @ApiQuery({ name: 'limit', required: false })
-  getMessages(
+  async getMessages(
     @CurrentUser() user: any,
     @Param('id') id: string,
     @Query('page') page?: string,
     @Query('limit') limit?: string,
+    @Query('workspaceId') workspaceId?: string,
   ) {
+    await this.membershipsService.assertCanAccessWorkspace(user.tenantId, user._id || user.sub, workspaceId);
     return this.conversationsService.getMessages(
       user.tenantId,
       id,
       page ? parseInt(page) : 1,
       limit ? parseInt(limit) : 50,
+      workspaceId,
     );
   }
 
   @Post(':id/read')
   @ApiOperation({ summary: 'Mark conversation as read' })
-  markAsRead(@CurrentUser() user: any, @Param('id') id: string) {
-    return this.conversationsService.markAsRead(user.tenantId, id);
+  async markAsRead(@CurrentUser() user: any, @Param('id') id: string, @Query('workspaceId') workspaceId?: string) {
+    await this.membershipsService.assertCanAccessWorkspace(user.tenantId, user._id || user.sub, workspaceId);
+    return this.conversationsService.markAsRead(user.tenantId, id, workspaceId);
   }
 
   @Delete(':id')
   @ApiOperation({ summary: 'Delete a conversation and its messages' })
-  remove(@CurrentUser() user: any, @Param('id') id: string) {
-    return this.conversationsService.remove(user.tenantId, id);
+  async remove(@CurrentUser() user: any, @Param('id') id: string, @Query('workspaceId') workspaceId?: string) {
+    await this.membershipsService.assertCanAccessWorkspace(user.tenantId, user._id || user.sub, workspaceId);
+    return this.conversationsService.remove(user.tenantId, id, workspaceId);
   }
 }

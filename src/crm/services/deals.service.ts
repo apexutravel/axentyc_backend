@@ -19,6 +19,9 @@ export class DealsService {
     const deal = new this.dealModel({
       ...createDealDto,
       tenantId: new Types.ObjectId(tenantId),
+      workspaceId: createDealDto.workspaceId
+        ? new Types.ObjectId(createDealDto.workspaceId)
+        : undefined,
       contactId: new Types.ObjectId(createDealDto.contactId),
       leadId: createDealDto.leadId
         ? new Types.ObjectId(createDealDto.leadId)
@@ -30,25 +33,34 @@ export class DealsService {
     return deal.save();
   }
 
-  async findAll(tenantId: string): Promise<Deal[]> {
+  async findAll(tenantId: string, workspaceId?: string): Promise<Deal[]> {
+    const query: any = { tenantId: new Types.ObjectId(tenantId) };
+    if (workspaceId) query.workspaceId = new Types.ObjectId(workspaceId);
+
     return this.dealModel
-      .find({ tenantId: new Types.ObjectId(tenantId) })
+      .find(query)
       .populate('contactId')
       .populate('assignedTo', 'firstName lastName email')
       .exec();
   }
 
-  async findByStage(tenantId: string, stage: DealStage): Promise<Deal[]> {
+  async findByStage(tenantId: string, stage: DealStage, workspaceId?: string): Promise<Deal[]> {
+    const query: any = { tenantId: new Types.ObjectId(tenantId), stage };
+    if (workspaceId) query.workspaceId = new Types.ObjectId(workspaceId);
+
     return this.dealModel
-      .find({ tenantId: new Types.ObjectId(tenantId), stage })
+      .find(query)
       .populate('contactId')
       .populate('assignedTo', 'firstName lastName email')
       .exec();
   }
 
-  async findOne(tenantId: string, id: string): Promise<Deal> {
+  async findOne(tenantId: string, id: string, workspaceId?: string): Promise<Deal> {
+    const query: any = { _id: id, tenantId: new Types.ObjectId(tenantId) };
+    if (workspaceId) query.workspaceId = new Types.ObjectId(workspaceId);
+
     const deal = await this.dealModel
-      .findOne({ _id: id, tenantId: new Types.ObjectId(tenantId) })
+      .findOne(query)
       .populate('contactId')
       .populate('leadId')
       .populate('assignedTo', 'firstName lastName email')
@@ -59,8 +71,12 @@ export class DealsService {
     return deal;
   }
 
-  async update(tenantId: string, id: string, updateDealDto: UpdateDealDto): Promise<Deal> {
+  async update(tenantId: string, id: string, updateDealDto: UpdateDealDto, workspaceId?: string): Promise<Deal> {
+    const query: any = { _id: id, tenantId: new Types.ObjectId(tenantId) };
+    if (workspaceId) query.workspaceId = new Types.ObjectId(workspaceId);
+
     const updateData: any = { ...updateDealDto };
+    if (updateDealDto.workspaceId) updateData.workspaceId = new Types.ObjectId(updateDealDto.workspaceId);
     if (updateDealDto.contactId) updateData.contactId = new Types.ObjectId(updateDealDto.contactId);
     if (updateDealDto.leadId) updateData.leadId = new Types.ObjectId(updateDealDto.leadId);
     if (updateDealDto.assignedTo) updateData.assignedTo = new Types.ObjectId(updateDealDto.assignedTo);
@@ -71,7 +87,7 @@ export class DealsService {
 
     const deal = await this.dealModel
       .findOneAndUpdate(
-        { _id: id, tenantId: new Types.ObjectId(tenantId) },
+        query,
         updateData,
         { returnDocument: 'after' },
       )
@@ -83,18 +99,24 @@ export class DealsService {
     return deal;
   }
 
-  async remove(tenantId: string, id: string): Promise<void> {
+  async remove(tenantId: string, id: string, workspaceId?: string): Promise<void> {
+    const query: any = { _id: id, tenantId: new Types.ObjectId(tenantId) };
+    if (workspaceId) query.workspaceId = new Types.ObjectId(workspaceId);
+
     const result = await this.dealModel
-      .findOneAndDelete({ _id: id, tenantId: new Types.ObjectId(tenantId) })
+      .findOneAndDelete(query)
       .exec();
     if (!result) {
       throw new NotFoundException(`Deal with ID ${id} not found`);
     }
   }
 
-  async getPipelineSummary(tenantId: string) {
+  async getPipelineSummary(tenantId: string, workspaceId?: string) {
+    const match: any = { tenantId: new Types.ObjectId(tenantId) };
+    if (workspaceId) match.workspaceId = new Types.ObjectId(workspaceId);
+
     return this.dealModel.aggregate([
-      { $match: { tenantId: new Types.ObjectId(tenantId) } },
+      { $match: match },
       {
         $group: {
           _id: '$stage',

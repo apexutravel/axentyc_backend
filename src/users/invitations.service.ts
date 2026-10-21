@@ -4,12 +4,14 @@ import { Model, Types } from 'mongoose';
 import { randomBytes } from 'crypto';
 import { Invitation, InvitationDocument, InvitationStatus } from './entities/invitation.entity';
 import { InviteUserDto } from './dto/invite-user.dto';
+import { BillingService } from '../billing/billing.service';
 
 @Injectable()
 export class InvitationsService {
   constructor(
     @InjectModel(Invitation.name)
     private invitationModel: Model<InvitationDocument>,
+    private billingService: BillingService,
   ) {}
 
   async create(
@@ -17,6 +19,8 @@ export class InvitationsService {
     invitedById: string,
     dto: InviteUserDto,
   ): Promise<Invitation> {
+    await this.billingService.assertCanInviteUser(tenantId);
+
     // Check if user already exists or has pending invitation
     const existingInvite = await this.invitationModel.findOne({
       tenantId: new Types.ObjectId(tenantId),
@@ -38,6 +42,8 @@ export class InvitationsService {
       firstName: dto.firstName,
       lastName: dto.lastName,
       role: dto.role,
+      workspaceIds: (dto.workspaceIds || []).map((id) => new Types.ObjectId(id)),
+      permissions: dto.permissions || [],
       token,
       invitedBy: new Types.ObjectId(invitedById),
       expiresAt,

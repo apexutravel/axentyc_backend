@@ -11,6 +11,11 @@ import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { ContactSource } from '../entities/contact.entity';
 
 export class CreateContactDto {
+  @ApiPropertyOptional({ example: '507f1f77bcf86cd799439011' })
+  @IsString()
+  @IsOptional()
+  workspaceId?: string;
+
   @ApiProperty({ example: 'John Doe' })
   @IsString()
   @IsNotEmpty()

@@ -23,6 +23,11 @@ class AutomationActionDto {
 }
 
 export class CreateAutomationDto {
+  @ApiPropertyOptional({ example: '507f1f77bcf86cd799439011' })
+  @IsString()
+  @IsOptional()
+  workspaceId?: string;
+
   @ApiProperty({ example: 'Auto-reply on new message' })
   @IsString()
   @IsNotEmpty()

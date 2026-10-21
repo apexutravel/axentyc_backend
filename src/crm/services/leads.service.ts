@@ -22,6 +22,9 @@ export class LeadsService {
     const lead = new this.leadModel({
       ...createLeadDto,
       tenantId: new Types.ObjectId(tenantId),
+      workspaceId: createLeadDto.workspaceId
+        ? new Types.ObjectId(createLeadDto.workspaceId)
+        : undefined,
       contactId: new Types.ObjectId(createLeadDto.contactId),
       assignedTo: createLeadDto.assignedTo
         ? new Types.ObjectId(createLeadDto.assignedTo)
@@ -30,17 +33,23 @@ export class LeadsService {
     return lead.save();
   }
 
-  async findAll(tenantId: string): Promise<Lead[]> {
+  async findAll(tenantId: string, workspaceId?: string): Promise<Lead[]> {
+    const query: any = { tenantId: new Types.ObjectId(tenantId) };
+    if (workspaceId) query.workspaceId = new Types.ObjectId(workspaceId);
+
     return this.leadModel
-      .find({ tenantId: new Types.ObjectId(tenantId) })
+      .find(query)
       .populate('contactId')
       .populate('assignedTo', 'firstName lastName email')
       .exec();
   }
 
-  async findOne(tenantId: string, id: string): Promise<Lead> {
+  async findOne(tenantId: string, id: string, workspaceId?: string): Promise<Lead> {
+    const query: any = { _id: id, tenantId: new Types.ObjectId(tenantId) };
+    if (workspaceId) query.workspaceId = new Types.ObjectId(workspaceId);
+
     const lead = await this.leadModel
-      .findOne({ _id: id, tenantId: new Types.ObjectId(tenantId) })
+      .findOne(query)
       .populate('contactId')
       .populate('assignedTo', 'firstName lastName email')
       .exec();
@@ -50,15 +59,19 @@ export class LeadsService {
     return lead;
   }
 
-  async update(tenantId: string, id: string, updateLeadDto: UpdateLeadDto): Promise<Lead> {
+  async update(tenantId: string, id: string, updateLeadDto: UpdateLeadDto, workspaceId?: string): Promise<Lead> {
+    const query: any = { _id: id, tenantId: new Types.ObjectId(tenantId) };
+    if (workspaceId) query.workspaceId = new Types.ObjectId(workspaceId);
+
     const updateData: any = { ...updateLeadDto };
+    if (updateLeadDto.workspaceId) updateData.workspaceId = new Types.ObjectId(updateLeadDto.workspaceId);
     if (updateLeadDto.contactId) updateData.contactId = new Types.ObjectId(updateLeadDto.contactId);
     if (updateLeadDto.assignedTo) updateData.assignedTo = new Types.ObjectId(updateLeadDto.assignedTo);
     updateData.lastActivityAt = new Date();
 
     const lead = await this.leadModel
       .findOneAndUpdate(
-        { _id: id, tenantId: new Types.ObjectId(tenantId) },
+        query,
         updateData,
         { returnDocument: 'after' },
       )
@@ -70,26 +83,35 @@ export class LeadsService {
     return lead;
   }
 
-  async remove(tenantId: string, id: string): Promise<void> {
+  async remove(tenantId: string, id: string, workspaceId?: string): Promise<void> {
+    const query: any = { _id: id, tenantId: new Types.ObjectId(tenantId) };
+    if (workspaceId) query.workspaceId = new Types.ObjectId(workspaceId);
+
     const result = await this.leadModel
-      .findOneAndDelete({ _id: id, tenantId: new Types.ObjectId(tenantId) })
+      .findOneAndDelete(query)
       .exec();
     if (!result) {
       throw new NotFoundException(`Lead with ID ${id} not found`);
     }
   }
 
-  async bulkDelete(tenantId: string, ids: string[]): Promise<{ deleted: number }> {
-    const result = await this.leadModel.deleteMany({
+  async bulkDelete(tenantId: string, ids: string[], workspaceId?: string): Promise<{ deleted: number }> {
+    const query: any = {
       _id: { $in: ids.map(id => new Types.ObjectId(id)) },
       tenantId: new Types.ObjectId(tenantId),
-    });
+    };
+    if (workspaceId) query.workspaceId = new Types.ObjectId(workspaceId);
+
+    const result = await this.leadModel.deleteMany(query);
     return { deleted: result.deletedCount };
   }
 
-  async convertToDeal(tenantId: string, id: string): Promise<Deal> {
+  async convertToDeal(tenantId: string, id: string, workspaceId?: string): Promise<Deal> {
+    const query: any = { _id: id, tenantId: new Types.ObjectId(tenantId) };
+    if (workspaceId) query.workspaceId = new Types.ObjectId(workspaceId);
+
     const lead = await this.leadModel
-      .findOne({ _id: id, tenantId: new Types.ObjectId(tenantId) })
+      .findOne(query)
       .exec();
     if (!lead) {
       throw new NotFoundException(`Lead with ID ${id} not found`);
@@ -97,6 +119,7 @@ export class LeadsService {
 
     const deal = new this.dealModel({
       tenantId: new Types.ObjectId(tenantId),
+      workspaceId: lead.workspaceId,
       contactId: lead.contactId,
       leadId: lead._id,
       title: lead.title,

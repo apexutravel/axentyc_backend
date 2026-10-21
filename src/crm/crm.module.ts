@@ -9,9 +9,11 @@ import { DealsService } from './services/deals.service';
 import { ContactsController } from './controllers/contacts.controller';
 import { LeadsController } from './controllers/leads.controller';
 import { DealsController } from './controllers/deals.controller';
+import { MembershipsModule } from '../memberships/memberships.module';
 
 @Module({
   imports: [
+    MembershipsModule,
     MongooseModule.forFeature([
       { name: Contact.name, schema: ContactSchema },
       { name: Lead.name, schema: LeadSchema },

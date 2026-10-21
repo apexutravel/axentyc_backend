@@ -6,17 +6,22 @@ import { UpdateWidgetConfigDto } from './dto/update-widget-config.dto';
 import { WidgetMessageDto } from './dto/widget-message.dto';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { Public } from '../common/decorators/public.decorator';
+import { MembershipsService } from '../memberships/memberships.service';
 
 @ApiTags('chat-widget')
 @Controller('chat-widget')
 export class ChatWidgetController {
-  constructor(private readonly chatWidgetService: ChatWidgetService) {}
+  constructor(
+    private readonly chatWidgetService: ChatWidgetService,
+    private readonly membershipsService: MembershipsService,
+  ) {}
 
   @Get()
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Get widget configuration (returns null if not configured)' })
-  async getConfig(@CurrentUser() user: any) {
-    const config = await this.chatWidgetService.getWidgetConfigOrNull(user.tenantId);
+  async getConfig(@CurrentUser() user: any, @Query('workspaceId') workspaceId?: string) {
+    await this.membershipsService.assertCanAccessWorkspace(user.tenantId, user._id || user.sub, workspaceId);
+    const config = await this.chatWidgetService.getWidgetConfigOrNull(user.tenantId, workspaceId);
     if (!config) return { exists: false };
     
     const plain = (config as any).toObject ? (config as any).toObject() : config;
@@ -35,21 +40,24 @@ export class ChatWidgetController {
     @CurrentUser() user: any,
     @Body() dto: UpdateWidgetConfigDto,
   ) {
+    await this.membershipsService.assertCanManageAccount(user.tenantId, user._id || user.sub);
     return this.chatWidgetService.saveWidgetConfig(user.tenantId, dto);
   }
 
   @Post('regenerate')
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Regenerate widget ID' })
-  regenerate(@CurrentUser() user: any) {
+  async regenerate(@CurrentUser() user: any) {
+    await this.membershipsService.assertCanManageAccount(user.tenantId, user._id || user.sub);
     return this.chatWidgetService.regenerateWidgetId(user.tenantId);
   }
 
   @Get('script')
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Get widget embed script' })
-  async getScript(@CurrentUser() user: any) {
-    const config = await this.chatWidgetService.getWidgetConfigOrNull(user.tenantId);
+  async getScript(@CurrentUser() user: any, @Query('workspaceId') workspaceId?: string) {
+    await this.membershipsService.assertCanAccessWorkspace(user.tenantId, user._id || user.sub, workspaceId);
+    const config = await this.chatWidgetService.getWidgetConfigOrNull(user.tenantId, workspaceId);
     if (!config) {
       return { script: null, widgetId: null };
     }

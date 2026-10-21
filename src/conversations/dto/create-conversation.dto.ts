@@ -3,6 +3,11 @@ import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { ConversationChannel } from '../entities/conversation.entity';
 
 export class CreateConversationDto {
+  @ApiPropertyOptional({ example: '507f1f77bcf86cd799439011' })
+  @IsString()
+  @IsOptional()
+  workspaceId?: string;
+
   @ApiPropertyOptional({ example: '60d5f484f1a2c8b1f8e4e1a2' })
   @IsString()
   @IsOptional()

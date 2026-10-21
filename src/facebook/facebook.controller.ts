@@ -2,7 +2,6 @@ import {
   Controller,
   Get,
   Post,
-  Delete,
   Body,
   Query,
   Param,
@@ -10,15 +9,16 @@ import {
   HttpCode,
   Logger,
   Req,
+  ForbiddenException,
 } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { Public } from '../common/decorators/public.decorator';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { FacebookService } from './facebook.service';
-import { SaveFacebookConfigDto } from './dto/save-facebook-config.dto';
 import type { Response, Request } from 'express';
 import { createHmac, timingSafeEqual } from 'crypto';
 import { ConfigService } from '@nestjs/config';
+import { MembershipsService } from '../memberships/memberships.service';
 
 @ApiTags('facebook')
 @Controller()
@@ -28,7 +28,20 @@ export class FacebookController {
   constructor(
     private readonly facebookService: FacebookService,
     private readonly configService: ConfigService,
+    private readonly membershipsService: MembershipsService,
   ) {}
+
+  private async assertCanManage(user: any): Promise<void> {
+    await this.membershipsService.assertCanManageAccount(user.tenantId, user._id || user.sub);
+  }
+
+  private stripSecrets(account: any) {
+    const obj = account?.toObject ? account.toObject() : { ...account };
+    delete obj.accessToken;
+    delete obj.refreshToken;
+    delete obj.webhookSecret;
+    return obj;
+  }
 
   // ═══════════════ PUBLIC WEBHOOK ENDPOINTS ═══════════════
 
@@ -57,49 +70,34 @@ export class FacebookController {
     @Body() body: any,
     @Req() req: Request,
   ) {
-    this.logger.log(`Facebook webhook received: ${body?.object || 'unknown'} with ${Array.isArray(body?.entry) ? body.entry.length : 0} entr${Array.isArray(body?.entry) && body.entry.length === 1 ? 'y' : 'ies'}`);
-    if (body?.object === 'instagram') {
-      this.logger.warn(`[WEBHOOK] ⚠️ INSTAGRAM webhook received! Entries: ${JSON.stringify(body.entry?.map((e: any) => ({ id: e.id, hasMessaging: !!(e.messaging?.length), hasChanges: !!(e.changes?.length) })))}`);
-    }
-    this.logger.debug(`Full webhook payload: ${JSON.stringify(body)}`);
-
-    // Verify signature if app secret is configured (log warnings but always process)
+    // Signature verification is mandatory: reject anything not signed by Meta with our app secret
     const appSecret = this.configService.get<string>('FACEBOOK_APP_SECRET');
-    const signature256 = req.headers['x-hub-signature-256'] as string;
-    const signatureSha1 = req.headers['x-hub-signature'] as string;
-
-    if (appSecret) {
-      if (!signature256 && !signatureSha1) {
-        this.logger.warn('[Webhook] Missing signature headers - processing anyway');
-      } else {
-        const rawBodyBuf: any = (req as any).rawBody;
-        const rawBody = rawBodyBuf ? rawBodyBuf : Buffer.from(JSON.stringify(body));
-        
-        if (signature256) {
-          const expectedSig256 = 'sha256=' + createHmac('sha256', appSecret)
-            .update(rawBody)
-            .digest('hex');
-          const received = Buffer.from(signature256);
-          const expected = Buffer.from(expectedSig256);
-          if (received.length !== expected.length || !timingSafeEqual(received, expected)) {
-            this.logger.warn(`[Webhook] Invalid sha256 signature - expected: ${expectedSig256}, received: ${signature256} - processing anyway`);
-          } else {
-            this.logger.log('[Webhook] Signature validated successfully (sha256)');
-          }
-        } else if (signatureSha1) {
-          const expectedSigSha1 = 'sha1=' + createHmac('sha1', appSecret)
-            .update(rawBody)
-            .digest('hex');
-          const received = Buffer.from(signatureSha1);
-          const expected = Buffer.from(expectedSigSha1);
-          if (received.length !== expected.length || !timingSafeEqual(received, expected)) {
-            this.logger.warn(`[Webhook] Invalid sha1 signature - expected: ${expectedSigSha1}, received: ${signatureSha1} - processing anyway`);
-          } else {
-            this.logger.log('[Webhook] Signature validated successfully (sha1)');
-          }
-        }
-      }
+    if (!appSecret) {
+      this.logger.error('[Webhook] FACEBOOK_APP_SECRET is not configured - rejecting webhook');
+      throw new ForbiddenException('Webhook not configured');
     }
+
+    const signature256 = req.headers['x-hub-signature-256'] as string | undefined;
+    const signatureSha1 = req.headers['x-hub-signature'] as string | undefined;
+    const rawBody: Buffer | undefined = (req as any).rawBody;
+
+    if (!rawBody || (!signature256 && !signatureSha1)) {
+      this.logger.warn('[Webhook] Missing signature or raw body - rejecting');
+      throw new ForbiddenException('Invalid signature');
+    }
+
+    const algo = signature256 ? 'sha256' : 'sha1';
+    const received = (signature256 || signatureSha1) as string;
+    const expected = `${algo}=` + createHmac(algo, appSecret).update(rawBody).digest('hex');
+    const receivedBuf = Buffer.from(received);
+    const expectedBuf = Buffer.from(expected);
+    if (receivedBuf.length !== expectedBuf.length || !timingSafeEqual(receivedBuf, expectedBuf)) {
+      this.logger.warn(`[Webhook] Invalid ${algo} signature - rejecting`);
+      throw new ForbiddenException('Invalid signature');
+    }
+
+    this.logger.log(`Facebook webhook received: ${body?.object || 'unknown'} with ${Array.isArray(body?.entry) ? body.entry.length : 0} entr${Array.isArray(body?.entry) && body.entry.length === 1 ? 'y' : 'ies'}`);
+    this.logger.debug(`Full webhook payload: ${JSON.stringify(body)}`);
 
     // Process async to not block the response
     this.facebookService.handleWebhook(body).catch((err) => {
@@ -110,22 +108,6 @@ export class FacebookController {
   }
 
   // ═══════════════ AUTHENTICATED INTEGRATION ENDPOINTS ═══════════════
-
-  @Post('integrations/facebook/config')
-  @ApiBearerAuth()
-  @ApiOperation({ summary: 'Save Facebook App credentials' })
-  async saveFacebookConfig(
-    @CurrentUser() user: any,
-    @Body() dto: SaveFacebookConfigDto,
-  ) {
-    const config = await this.facebookService.saveFacebookConfig(
-      user.tenantId,
-      dto.appId,
-      dto.appSecret,
-      dto.verifyToken,
-    );
-    return { success: true, config: { appId: config.appId, verifyToken: config.verifyToken } };
-  }
 
   @Get('integrations/facebook/config')
   @ApiBearerAuth()
@@ -149,16 +131,7 @@ export class FacebookController {
     return {
       available: true,
       webhookUrl,
-      verifyToken: this.configService.get('FACEBOOK_VERIFY_TOKEN') || 'axentyc_fb_verify',
     };
-  }
-
-  @Delete('integrations/facebook/config')
-  @ApiBearerAuth()
-  @ApiOperation({ summary: 'Delete Facebook App configuration' })
-  async deleteFacebookConfig(@CurrentUser() user: any) {
-    await this.facebookService.deleteFacebookConfig(user.tenantId);
-    return { success: true };
   }
 
   @Get('integrations/facebook/oauth-url')
@@ -168,10 +141,11 @@ export class FacebookController {
     @CurrentUser() user: any,
     @Query('redirect_uri') redirectUri: string,
   ) {
+    await this.assertCanManage(user);
     if (!redirectUri) {
       return { error: 'redirect_uri is required' };
     }
-    const url = await this.facebookService.getOAuthUrl(user.tenantId, redirectUri);
+    const url = await this.facebookService.getOAuthUrl(user.tenantId, user._id || user.sub, redirectUri);
     if (!url) {
       return { error: 'Facebook App not configured. Please add your App ID and Secret first.' };
     }
@@ -183,8 +157,11 @@ export class FacebookController {
   @ApiOperation({ summary: 'Exchange OAuth code for access token' })
   async exchangeToken(
     @CurrentUser() user: any,
-    @Body() body: { code: string; redirectUri: string },
+    @Body() body: { code: string; redirectUri: string; state?: string },
   ) {
+    await this.assertCanManage(user);
+    this.facebookService.verifyOAuthState(body.state, user.tenantId, user._id || user.sub);
+
     const { accessToken } = await this.facebookService.exchangeCodeForToken(
       user.tenantId,
       body.code,
@@ -214,8 +191,10 @@ export class FacebookController {
     @Body() body: {
       pageId: string;
       selectionToken: string;
+      workspaceId?: string;
     },
   ) {
+    await this.assertCanManage(user);
     const page = this.facebookService.consumePendingPageSelection(
       user.tenantId,
       body.selectionToken,
@@ -233,16 +212,18 @@ export class FacebookController {
         fanCount: page.fanCount,
         instagramAccount: page.instagramAccount,
       },
+      body.workspaceId,
     );
+    this.facebookService.discardPendingPageSelection(body.selectionToken);
 
-    return { success: true, account };
+    return { success: true, account: this.stripSecrets(account) };
   }
 
   @Get('integrations/facebook/status')
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Get Facebook integration status' })
-  async getStatus(@CurrentUser() user: any) {
-    return this.facebookService.getStatus(user.tenantId);
+  async getStatus(@CurrentUser() user: any, @Query('workspaceId') workspaceId?: string) {
+    return this.facebookService.getStatus(user.tenantId, workspaceId);
   }
 
   @Post('integrations/facebook/disconnect/:id')
@@ -252,6 +233,7 @@ export class FacebookController {
     @CurrentUser() user: any,
     @Param('id') id: string,
   ) {
+    await this.assertCanManage(user);
     await this.facebookService.disconnect(user.tenantId, id);
     return { success: true };
   }
@@ -281,6 +263,7 @@ export class FacebookController {
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Re-subscribe all connected pages to webhooks (to update subscription fields)' })
   async resubscribePages(@CurrentUser() user: any) {
+    await this.assertCanManage(user);
     const result = await this.facebookService.resubscribeAllPages(user.tenantId);
     return result;
   }
@@ -407,6 +390,7 @@ export class FacebookController {
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Diagnose Instagram connection status' })
   async diagnoseInstagram(@CurrentUser() user: any) {
+    await this.assertCanManage(user);
     return this.facebookService.diagnoseInstagram(user.tenantId);
   }
 
@@ -422,6 +406,7 @@ export class FacebookController {
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Re-subscribe Instagram account to webhooks' })
   async resubscribeInstagramWebhook(@CurrentUser() user: any) {
+    await this.assertCanManage(user);
     return this.facebookService.resubscribeInstagramWebhook(user.tenantId);
   }
 }

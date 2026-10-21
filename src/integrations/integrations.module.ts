@@ -6,6 +6,8 @@ import { IntegrationsService } from './integrations.service';
 import { IntegrationsController } from './integrations.controller';
 import { EmailIntegrationsService } from './email-integrations.service';
 import { EmailsModule } from '../emails/emails.module';
+import { BillingModule } from '../billing/billing.module';
+import { MembershipsModule } from '../memberships/memberships.module';
 
 @Module({
   imports: [
@@ -13,7 +15,9 @@ import { EmailsModule } from '../emails/emails.module';
       { name: SocialAccount.name, schema: SocialAccountSchema },
       { name: EmailIntegration.name, schema: EmailIntegrationSchema },
     ]),
+    MembershipsModule,
     forwardRef(() => EmailsModule),
+    BillingModule,
   ],
   controllers: [IntegrationsController],
   providers: [IntegrationsService, EmailIntegrationsService],

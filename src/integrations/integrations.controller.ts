@@ -2,16 +2,19 @@ import {
   Controller,
   Get,
   Post,
+  Put,
   Body,
   Param,
   Delete,
+  Query,
 } from '@nestjs/common';
-import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
+import { ApiTags, ApiOperation, ApiBearerAuth, ApiQuery } from '@nestjs/swagger';
 import { IntegrationsService } from './integrations.service';
 import { ConnectSocialDto } from './dto/connect-social.dto';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { EmailIntegrationsService } from './email-integrations.service';
 import { ConnectEmailDto } from './dto/connect-email.dto';
+import { MembershipsService } from '../memberships/memberships.service';
 
 @ApiTags('integrations')
 @ApiBearerAuth()
@@ -20,131 +23,117 @@ export class IntegrationsController {
   constructor(
     private readonly integrationsService: IntegrationsService,
     private readonly emailIntegrationsService: EmailIntegrationsService,
+    private readonly membershipsService: MembershipsService,
   ) {}
 
   @Post('connect')
   @ApiOperation({ summary: 'Connect a social media account' })
-  connect(@CurrentUser() user: any, @Body() dto: ConnectSocialDto) {
+  async connect(@CurrentUser() user: any, @Body() dto: ConnectSocialDto) {
+    await this.membershipsService.assertCanManageAccount(user.tenantId, user._id || user.sub);
     return this.integrationsService.connect(user.tenantId, dto);
   }
 
   @Get()
   @ApiOperation({ summary: 'Get all connected social accounts' })
-  findAll(@CurrentUser() user: any) {
-    return this.integrationsService.findAll(user.tenantId);
+  @ApiQuery({ name: 'workspaceId', required: false })
+  async findAll(@CurrentUser() user: any, @Query('workspaceId') workspaceId?: string) {
+    await this.membershipsService.assertCanAccessWorkspace(user.tenantId, user._id || user.sub, workspaceId);
+    return this.integrationsService.findAll(user.tenantId, workspaceId);
   }
 
   @Get(':id')
   @ApiOperation({ summary: 'Get a social account by ID' })
-  findOne(@CurrentUser() user: any, @Param('id') id: string) {
+  async findOne(@CurrentUser() user: any, @Param('id') id: string) {
+    await this.membershipsService.assertCanManageAccount(user.tenantId, user._id || user.sub);
     return this.integrationsService.findOne(user.tenantId, id);
   }
 
   @Post(':id/disconnect')
   @ApiOperation({ summary: 'Disconnect a social media account' })
-  disconnect(@CurrentUser() user: any, @Param('id') id: string) {
+  async disconnect(@CurrentUser() user: any, @Param('id') id: string) {
+    await this.membershipsService.assertCanManageAccount(user.tenantId, user._id || user.sub);
     return this.integrationsService.disconnect(user.tenantId, id);
   }
 
   @Delete(':id')
   @ApiOperation({ summary: 'Remove a social media account' })
-  remove(@CurrentUser() user: any, @Param('id') id: string) {
+  async remove(@CurrentUser() user: any, @Param('id') id: string) {
+    await this.membershipsService.assertCanManageAccount(user.tenantId, user._id || user.sub);
     return this.integrationsService.remove(user.tenantId, id);
   }
 
-  // --- Email Integration (Tenant-scoped) ---
+  // --- Email Integration: multiple mailboxes per agency (tenant) ---
+  // NOTE: the segment count of every `email/...` route differs from the generic `:id` routes
+  // above (`:id`, `:id/disconnect`), so they never shadow each other.
 
   @Post('email/test')
   @ApiOperation({ summary: 'Test email connection (SMTP and IMAP)' })
-  testEmail(@CurrentUser() user: any, @Body() dto: ConnectEmailDto) {
+  async testEmail(@CurrentUser() user: any, @Body() dto: ConnectEmailDto) {
+    await this.membershipsService.assertCanManageAccount(user.tenantId, user._id || user.sub);
     return this.emailIntegrationsService.testConnection(user.tenantId, dto);
   }
 
   @Post('email/test-smtp')
   @ApiOperation({ summary: 'Test SMTP connection only' })
   async testSmtpOnly(@CurrentUser() user: any, @Body() dto: ConnectEmailDto) {
-    const result = await this.emailIntegrationsService['testSmtp'](dto);
-    return { smtp: result };
+    await this.membershipsService.assertCanManageAccount(user.tenantId, user._id || user.sub);
+    return this.emailIntegrationsService.testSmtpOnly(user.tenantId, dto);
   }
 
   @Post('email/test-imap')
   @ApiOperation({ summary: 'Test IMAP connection only' })
   async testImapOnly(@CurrentUser() user: any, @Body() dto: ConnectEmailDto) {
-    const result = await this.emailIntegrationsService['testImap'](dto);
-    return { imap: result };
+    await this.membershipsService.assertCanManageAccount(user.tenantId, user._id || user.sub);
+    return this.emailIntegrationsService.testImapOnly(user.tenantId, dto);
   }
 
-  @Post('email/connect')
-  @ApiOperation({ summary: 'Connect and save email integration (SMTP/IMAP) for tenant' })
-  connectEmail(@CurrentUser() user: any, @Body() dto: ConnectEmailDto) {
-    return this.emailIntegrationsService.connect(user.tenantId, dto);
+  @Get('email/accounts')
+  @ApiOperation({ summary: 'List the mailboxes linked to the agency' })
+  @ApiQuery({ name: 'workspaceId', required: false })
+  async listEmailAccounts(@CurrentUser() user: any, @Query('workspaceId') workspaceId?: string) {
+    await this.membershipsService.assertCanAccessWorkspace(user.tenantId, user._id || user.sub, workspaceId);
+    return this.emailIntegrationsService.list(user.tenantId, workspaceId);
   }
 
-  @Get('email/status')
-  @ApiOperation({ summary: 'Get email integration status' })
-  getEmailStatus(@CurrentUser() user: any) {
-    return this.emailIntegrationsService.status(user.tenantId);
+  @Post('email/accounts')
+  @ApiOperation({ summary: 'Link a new mailbox (SMTP/IMAP) to the agency' })
+  async createEmailAccount(@CurrentUser() user: any, @Body() dto: ConnectEmailDto) {
+    await this.membershipsService.assertCanManageAccount(user.tenantId, user._id || user.sub);
+    return this.emailIntegrationsService.connect(user.tenantId, { ...dto, integrationId: undefined });
   }
 
-  @Get('email/debug')
-  @ApiOperation({ summary: 'Debug email configuration (no passwords)' })
-  async debugEmailConfig(@CurrentUser() user: any) {
-    const { Types } = require('mongoose');
-    const config = await this.emailIntegrationsService['emailModel'].findOne({
-      tenantId: new Types.ObjectId(user.tenantId),
-    });
-    if (!config) {
-      return { error: 'No email configuration found', tenantId: user.tenantId };
-    }
-    
-    // Test password decryption
-    let smtpPassDecrypted = false;
-    let imapPassDecrypted = false;
-    let smtpPassLength = 0;
-    let imapPassLength = 0;
-    
-    try {
-      const smtpPass = this.emailIntegrationsService['decryptSecret'](config.smtp?.passEnc);
-      smtpPassDecrypted = true;
-      smtpPassLength = smtpPass?.length || 0;
-    } catch (e) {
-      smtpPassDecrypted = false;
-    }
-    
-    try {
-      const imapPass = this.emailIntegrationsService['decryptSecret'](config.imap?.passEnc);
-      imapPassDecrypted = true;
-      imapPassLength = imapPass?.length || 0;
-    } catch (e) {
-      imapPassDecrypted = false;
-    }
-    
-    return {
-      smtp: {
-        host: config.smtp?.host,
-        port: config.smtp?.port,
-        secure: config.smtp?.secure,
-        user: config.smtp?.user,
-        hasPassword: !!config.smtp?.passEnc,
-        passwordDecrypts: smtpPassDecrypted,
-        passwordLength: smtpPassLength,
-      },
-      imap: {
-        host: config.imap?.host,
-        port: config.imap?.port,
-        secure: config.imap?.secure,
-        user: config.imap?.user,
-        hasPassword: !!config.imap?.passEnc,
-        passwordDecrypts: imapPassDecrypted,
-        passwordLength: imapPassLength,
-      },
-      status: config.status,
-    };
+  @Put('email/accounts/:id')
+  @ApiOperation({ summary: 'Update (and re-verify) a linked mailbox' })
+  async updateEmailAccount(@CurrentUser() user: any, @Param('id') id: string, @Body() dto: ConnectEmailDto) {
+    await this.membershipsService.assertCanManageAccount(user.tenantId, user._id || user.sub);
+    return this.emailIntegrationsService.connect(user.tenantId, { ...dto, integrationId: id });
   }
 
-  @Post('email/disconnect')
-  @ApiOperation({ summary: 'Disconnect email integration for tenant' })
-  disconnectEmail(@CurrentUser() user: any) {
-    return this.emailIntegrationsService.disconnect(user.tenantId);
+  @Post('email/accounts/:id/test')
+  @ApiOperation({ summary: 'Test a saved mailbox with its stored credentials' })
+  async testEmailAccount(@CurrentUser() user: any, @Param('id') id: string, @Body('workspaceId') workspaceId?: string) {
+    await this.membershipsService.assertCanManageAccount(user.tenantId, user._id || user.sub);
+    return this.emailIntegrationsService.testStored(user.tenantId, id, workspaceId);
+  }
+
+  @Post('email/accounts/:id/default')
+  @ApiOperation({ summary: 'Set a mailbox as the default sender / inbox' })
+  async setDefaultEmailAccount(@CurrentUser() user: any, @Param('id') id: string, @Body('workspaceId') workspaceId?: string) {
+    await this.membershipsService.assertCanManageAccount(user.tenantId, user._id || user.sub);
+    return this.emailIntegrationsService.setDefault(user.tenantId, id, workspaceId);
+  }
+
+  @Post('email/accounts/:id/disconnect')
+  @ApiOperation({ summary: 'Disconnect a mailbox (keeps its settings and cached mail)' })
+  async disconnectEmailAccount(@CurrentUser() user: any, @Param('id') id: string, @Body('workspaceId') workspaceId?: string) {
+    await this.membershipsService.assertCanManageAccount(user.tenantId, user._id || user.sub);
+    return this.emailIntegrationsService.disconnect(user.tenantId, id, workspaceId);
+  }
+
+  @Delete('email/accounts/:id')
+  @ApiOperation({ summary: 'Remove a mailbox and its cached messages' })
+  async removeEmailAccount(@CurrentUser() user: any, @Param('id') id: string, @Query('workspaceId') workspaceId?: string) {
+    await this.membershipsService.assertCanManageAccount(user.tenantId, user._id || user.sub);
+    return this.emailIntegrationsService.remove(user.tenantId, id, workspaceId);
   }
 }

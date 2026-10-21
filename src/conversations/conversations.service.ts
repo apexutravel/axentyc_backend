@@ -34,7 +34,8 @@ export class ConversationsService {
     const conversation = new this.conversationModel({
       ...dto,
       tenantId: new Types.ObjectId(tenantId),
-      contactId: new Types.ObjectId(dto.contactId),
+      workspaceId: dto.workspaceId ? new Types.ObjectId(dto.workspaceId) : undefined,
+      contactId: dto.contactId ? new Types.ObjectId(dto.contactId) : undefined,
       assignedTo: dto.assignedTo ? new Types.ObjectId(dto.assignedTo) : undefined,
     });
     const saved = await conversation.save();
@@ -54,6 +55,7 @@ export class ConversationsService {
     channel?: string;
     channels?: string;
     assignedTo?: string;
+    workspaceId?: string;
     tags?: string[];
   }): Promise<Conversation[]> {
     const query: any = {
@@ -62,6 +64,7 @@ export class ConversationsService {
     };
 
     if (filters?.status) query.status = filters.status;
+    if (filters?.workspaceId) query.workspaceId = new Types.ObjectId(filters.workspaceId);
     if (filters?.channel) query.channel = filters.channel;
     if (filters?.channels) {
       // Support multiple channels: "web_chat,facebook,instagram"
@@ -79,9 +82,12 @@ export class ConversationsService {
       .exec();
   }
 
-  async findOne(tenantId: string, id: string): Promise<Conversation> {
+  async findOne(tenantId: string, id: string, workspaceId?: string): Promise<Conversation> {
+    const query: any = { _id: id, tenantId: new Types.ObjectId(tenantId) };
+    if (workspaceId) query.workspaceId = new Types.ObjectId(workspaceId);
+
     const conversation = await this.conversationModel
-      .findOne({ _id: id, tenantId: new Types.ObjectId(tenantId) })
+      .findOne(query)
       .populate('contactId')
       .populate('assignedTo', 'firstName lastName email')
       .exec();
@@ -91,7 +97,10 @@ export class ConversationsService {
     return conversation;
   }
 
-  async update(tenantId: string, id: string, dto: UpdateConversationDto): Promise<Conversation> {
+  async update(tenantId: string, id: string, dto: UpdateConversationDto, workspaceId?: string): Promise<Conversation> {
+    const query: any = { _id: id, tenantId: new Types.ObjectId(tenantId) };
+    if (workspaceId) query.workspaceId = new Types.ObjectId(workspaceId);
+
     const updateData: any = { ...dto };
     if (dto.assignedTo) {
       updateData.assignedTo = new Types.ObjectId(dto.assignedTo);
@@ -102,7 +111,7 @@ export class ConversationsService {
 
     const conversation = await this.conversationModel
       .findOneAndUpdate(
-        { _id: id, tenantId: new Types.ObjectId(tenantId) },
+        query,
         updateData,
         { returnDocument: 'after' },
       )
@@ -134,11 +143,13 @@ export class ConversationsService {
     conversationId: string,
     senderId: string,
     dto: SendMessageDto,
+    workspaceId?: string,
   ): Promise<Message> {
-    await this.findOne(tenantId, conversationId);
+    const conversation = await this.findOne(tenantId, conversationId, workspaceId);
 
     const message = new this.messageModel({
       tenantId: new Types.ObjectId(tenantId),
+      workspaceId: conversation.workspaceId,
       conversationId: new Types.ObjectId(conversationId),
       direction: MessageDirection.OUTBOUND,
       type: dto.type || 'text',
@@ -175,8 +186,13 @@ export class ConversationsService {
           conversationId,
           dto.content,
           dto.media ? { url: dto.media.url, mimeType: dto.media.mimeType } : undefined,
-        ).catch((err) => {
+        ).then((delivered) => {
+          if (!delivered) {
+            return this.markMessageFailed(tenantId, conversationId, savedMessage._id.toString(), conv.channel);
+          }
+        }).catch(async (err) => {
           console.error(`Failed to send ${conv.channel} message:`, err);
+          await this.markMessageFailed(tenantId, conversationId, savedMessage._id.toString(), conv.channel);
         });
       }
     }
@@ -184,13 +200,36 @@ export class ConversationsService {
     return savedMessage;
   }
 
+  private async markMessageFailed(
+    tenantId: string,
+    conversationId: string,
+    messageId: string,
+    channel: string,
+  ): Promise<void> {
+    try {
+      await this.messageModel.updateOne(
+        { _id: new Types.ObjectId(messageId), tenantId: new Types.ObjectId(tenantId) },
+        { $set: { status: MessageStatus.FAILED } },
+      );
+      this.eventsGateway.emitToConversation(conversationId, 'message.status.updated', {
+        conversationId,
+        messageId,
+        status: MessageStatus.FAILED,
+        channel,
+      });
+    } catch (e) {
+      console.error('Failed to mark message as failed:', e);
+    }
+  }
+
   async getMessages(
     tenantId: string,
     conversationId: string,
     page = 1,
     limit = 50,
+    workspaceId?: string,
   ): Promise<{ messages: Message[]; total: number }> {
-    await this.findOne(tenantId, conversationId);
+    await this.findOne(tenantId, conversationId, workspaceId);
 
     const skip = (page - 1) * limit;
 
@@ -222,9 +261,12 @@ export class ConversationsService {
       .exec();
   }
 
-  async markAsRead(tenantId: string, conversationId: string): Promise<void> {
+  async markAsRead(tenantId: string, conversationId: string, workspaceId?: string): Promise<void> {
+    const conversationQuery: any = { _id: conversationId, tenantId: new Types.ObjectId(tenantId) };
+    if (workspaceId) conversationQuery.workspaceId = new Types.ObjectId(workspaceId);
+
     const conversation = await this.conversationModel.findOneAndUpdate(
-      { _id: conversationId, tenantId: new Types.ObjectId(tenantId) },
+      conversationQuery,
       { unreadCount: 0 },
       { returnDocument: 'after' },
     );
@@ -286,12 +328,15 @@ export class ConversationsService {
     return result.modifiedCount;
   }
 
-  async findByWidgetVisitor(tenantId: string, visitorId: string): Promise<Conversation | null> {
+  async findByWidgetVisitor(tenantId: string, visitorId: string, workspaceId?: string): Promise<Conversation | null> {
+    const query: any = {
+      tenantId: new Types.ObjectId(tenantId),
+      'metadata.visitorId': visitorId,
+    };
+    if (workspaceId) query.workspaceId = new Types.ObjectId(workspaceId);
+
     return this.conversationModel
-      .findOne({
-        tenantId: new Types.ObjectId(tenantId),
-        'metadata.visitorId': visitorId,
-      })
+      .findOne(query)
       .populate('contactId')
       .exec();
   }
@@ -322,6 +367,7 @@ export class ConversationsService {
 
   async createWidgetContact(
     tenantId: string,
+    workspaceId: string | undefined,
     visitorId: string,
     visitorData?: {
       name?: string;
@@ -332,6 +378,7 @@ export class ConversationsService {
   ): Promise<Contact> {
     const contact = new this.contactModel({
       tenantId: new Types.ObjectId(tenantId),
+      workspaceId: workspaceId ? new Types.ObjectId(workspaceId) : undefined,
       name: visitorData?.name || `Visitor ${visitorId}`,
       email: visitorData?.email,
       phone: visitorData?.phone,
@@ -346,10 +393,13 @@ export class ConversationsService {
     return contact.save();
   }
 
-  async remove(tenantId: string, id: string): Promise<void> {
+  async remove(tenantId: string, id: string, workspaceId?: string): Promise<void> {
     // First, find the conversation to capture metadata for duplicate cleanup
+    const findQuery: any = { _id: id, tenantId: new Types.ObjectId(tenantId) };
+    if (workspaceId) findQuery.workspaceId = new Types.ObjectId(workspaceId);
+
     const found = await this.conversationModel
-      .findOne({ _id: id, tenantId: new Types.ObjectId(tenantId) })
+      .findOne(findQuery)
       .lean();
 
     if (!found) {
@@ -366,6 +416,7 @@ export class ConversationsService {
     const baseFilter: any = {
       tenantId: new Types.ObjectId(tenantId),
     };
+    if (workspaceId) baseFilter.workspaceId = new Types.ObjectId(workspaceId);
 
     let scopedFilter: any = {
       ...baseFilter,
@@ -431,6 +482,7 @@ export class ConversationsService {
 
     const message = new this.messageModel({
       tenantId: conversation.tenantId,
+      workspaceId: conversation.workspaceId,
       conversationId: new Types.ObjectId(conversationId),
       direction: messageData.direction,
       type: (messageData.type as any) || 'text',
