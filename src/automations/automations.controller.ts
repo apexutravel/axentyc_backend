@@ -38,6 +38,18 @@ export class AutomationsController {
     return this.automationsService.findAll(user.tenantId, workspaceId);
   }
 
+  @Get('runs')
+  @ApiOperation({ summary: 'Execution log (last 30 days)' })
+  async runs(
+    @CurrentUser() user: any,
+    @Query('workspaceId') workspaceId?: string,
+    @Query('automationId') automationId?: string,
+    @Query('limit') limit?: string,
+  ) {
+    await this.membershipsService.assertCanAccessWorkspace(user.tenantId, user._id || user.sub, workspaceId);
+    return this.automationsService.listRuns(user.tenantId, workspaceId, automationId, limit ? Number(limit) : 50);
+  }
+
   @Get(':id')
   @ApiOperation({ summary: 'Get an automation by ID' })
   async findOne(@CurrentUser() user: any, @Param('id') id: string, @Query('workspaceId') workspaceId?: string) {
@@ -54,7 +66,8 @@ export class AutomationsController {
     @Query('workspaceId') workspaceId?: string,
   ) {
     await this.membershipsService.assertCanManageAccount(user.tenantId, user._id || user.sub);
-    return this.automationsService.update(user.tenantId, id, dto, workspaceId);
+    // the web client sends the active workspace in the body of PATCH requests
+    return this.automationsService.update(user.tenantId, id, dto, workspaceId || dto.workspaceId);
   }
 
   @Delete(':id')

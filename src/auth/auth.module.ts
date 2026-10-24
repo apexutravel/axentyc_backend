@@ -9,6 +9,8 @@ import { TenantsModule } from '../tenants/tenants.module';
 import { WorkspacesModule } from '../workspaces/workspaces.module';
 import { MembershipsModule } from '../memberships/memberships.module';
 import { BillingModule } from '../billing/billing.module';
+import { MongooseModule } from '@nestjs/mongoose';
+import { PasswordReset, PasswordResetSchema } from './entities/password-reset.entity';
 import { JwtStrategy } from './strategies/jwt.strategy';
 import { RefreshTokenStrategy } from './strategies/refresh-token.strategy';
 
@@ -20,6 +22,7 @@ import { RefreshTokenStrategy } from './strategies/refresh-token.strategy';
     MembershipsModule,
     BillingModule,
     PassportModule,
+    MongooseModule.forFeature([{ name: PasswordReset.name, schema: PasswordResetSchema }]),
     JwtModule.registerAsync({
       imports: [ConfigModule],
       useFactory: async (configService: ConfigService) => ({

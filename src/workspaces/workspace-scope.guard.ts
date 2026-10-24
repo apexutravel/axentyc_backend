@@ -13,6 +13,13 @@ export const WORKSPACE_SCOPED_SEGMENTS = new Set([
   'chat-widget',
   'emails',
   'integrations',
+  'tasks',
+  'notes',
+  'quick-replies',
+  'activities',
+  'sales-documents',
+  'products',
+  'reports',
 ]);
 
 /** Returns the first path segment after the global prefix, e.g. `/api/v1/contacts/123` -> `contacts`. */

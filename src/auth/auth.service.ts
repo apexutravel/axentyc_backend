@@ -1,4 +1,9 @@
-import { Injectable, UnauthorizedException, BadRequestException } from '@nestjs/common';
+import { Injectable, Logger, UnauthorizedException, BadRequestException } from '@nestjs/common';
+import { InjectModel } from '@nestjs/mongoose';
+import { Model } from 'mongoose';
+import { createHash, randomBytes } from 'crypto';
+import { PasswordReset, PasswordResetDocument } from './entities/password-reset.entity';
+import { SystemMailerService } from '../billing/system-mailer.service';
 import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
 import * as bcrypt from 'bcrypt';
@@ -16,6 +21,8 @@ import { BillingService } from '../billing/billing.service';
 
 @Injectable()
 export class AuthService {
+  private readonly logger = new Logger(AuthService.name);
+
   constructor(
     private usersService: UsersService,
     private tenantsService: TenantsService,
@@ -25,6 +32,9 @@ export class AuthService {
     private billingService: BillingService,
     private jwtService: JwtService,
     private configService: ConfigService,
+    @InjectModel(PasswordReset.name)
+    private passwordResetModel: Model<PasswordResetDocument>,
+    private mailer: SystemMailerService,
   ) {}
 
   private toAccountRole(role: string): AccountRole {
@@ -228,11 +238,15 @@ export class AuthService {
     };
   }
 
-  async refreshTokens(userId: string, activeTenantId?: string, activeRole?: string) {
+  async refreshTokens(userId: string, activeTenantId?: string, activeRole?: string, issuedAt?: number) {
     const user = await this.usersService.findOne(userId);
     
     if (!user) {
       throw new UnauthorizedException('User not found');
+    }
+    const changedAt = (user as any).passwordChangedAt as Date | undefined;
+    if (changedAt && issuedAt && issuedAt * 1000 < changedAt.getTime() - 1000) {
+      throw new UnauthorizedException('Session expired');
     }
 
     const payload = {
@@ -276,5 +290,50 @@ export class AuthService {
         tenantId,
       },
     };
+  }
+
+  // ─── Password recovery ───
+
+  /**
+   * Always resolves the same way, so the endpoint cannot be used to discover which e-mails have an account.
+   * The link is valid for one hour and works once.
+   */
+  async forgotPassword(email: string): Promise<void> {
+    const clean = email.trim();
+    const user = (await this.usersService.findByEmail(clean)) || (await this.usersService.findByEmail(clean.toLowerCase()));
+    if (!user || !(user as any).isActive) return;
+
+    const userId = (user as any)._id;
+    // one live link per user, and no more than one new link per minute
+    const last = await this.passwordResetModel.findOne({ userId }).sort({ createdAt: -1 }).lean();
+    if (last && Date.now() - new Date((last as any).createdAt).getTime() < 60_000) return;
+    await this.passwordResetModel.deleteMany({ userId });
+
+    const token = randomBytes(32).toString('hex');
+    await this.passwordResetModel.create({
+      userId,
+      tokenHash: createHash('sha256').update(token).digest('hex'),
+      expiresAt: new Date(Date.now() + 60 * 60 * 1000),
+    });
+
+    const base = (this.configService.get<string>('FRONTEND_URL') || this.configService.get<string>('CORS_ORIGIN') || 'http://localhost:3000').replace(/\/+$/, '');
+    const link = `${base}/auth/reset-password?token=${token}`;
+    const name = (user.firstName || '').replace(/[<>&]/g, '');
+    const sent = await this.mailer.send(
+      user.email,
+      'Restablece tu contraseña de AXENTYC',
+      `<div style="font-family:Arial,sans-serif;max-width:520px"><h2>Restablecer contraseña</h2><p>Hola ${name},</p><p>Recibimos una solicitud para restablecer la contraseña de tu cuenta de AXENTYC. El enlace es válido por 1 hora y solo funciona una vez.</p><p><a href="${link}" style="background:#2563eb;color:#fff;padding:10px 18px;border-radius:8px;text-decoration:none">Crear nueva contraseña</a></p><p style="color:#888;font-size:12px">Si no fuiste tú, ignora este correo: tu contraseña no cambiará.</p></div>`,
+    );
+    if (!sent) this.logger.error('Password reset e-mail could not be sent (is SYSTEM_SMTP_* configured?)');
+  }
+
+  async resetPassword(token: string, newPassword: string): Promise<void> {
+    const tokenHash = createHash('sha256').update(token).digest('hex');
+    // Atomic: the link can only be consumed once even with concurrent requests
+    const record = await this.passwordResetModel.findOneAndDelete({ tokenHash, expiresAt: { $gt: new Date() } });
+    if (!record) throw new BadRequestException('El enlace no es válido o ya venció. Solicita uno nuevo.');
+
+    await this.usersService.changePassword(record.userId.toString(), newPassword);
+    await this.passwordResetModel.deleteMany({ userId: record.userId });
   }
 }

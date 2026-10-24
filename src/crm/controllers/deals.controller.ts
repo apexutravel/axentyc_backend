@@ -13,11 +13,13 @@ import { DealsService } from '../services/deals.service';
 import { CreateDealDto } from '../dto/create-deal.dto';
 import { UpdateDealDto } from '../dto/update-deal.dto';
 import { DealStage } from '../entities/deal.entity';
+import { RequiresFeature } from '../../billing/billing.guards';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { MembershipsService } from '../../memberships/memberships.service';
 
 @ApiTags('deals')
 @ApiBearerAuth()
+@RequiresFeature('deals')
 @Controller('deals')
 export class DealsController {
   constructor(

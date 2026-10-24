@@ -1,3 +1,4 @@
+import { BillingService } from '../billing/billing.service';
 import {
   Injectable,
   NotFoundException,
@@ -28,6 +29,7 @@ export class ConversationsService {
     private eventsGateway: EventsGateway,
     @Inject(forwardRef(() => FacebookService))
     private facebookService: FacebookService,
+    private billingService: BillingService,
   ) {}
 
   async create(tenantId: string, dto: CreateConversationDto): Promise<Conversation> {
@@ -141,10 +143,13 @@ export class ConversationsService {
   async sendMessage(
     tenantId: string,
     conversationId: string,
-    senderId: string,
+    /** Undefined for automated replies (no human sender) */
+    senderId: string | undefined,
     dto: SendMessageDto,
     workspaceId?: string,
   ): Promise<Message> {
+    // Paused/expired account or monthly conversation quota exhausted
+    await this.billingService.assertCanReply(tenantId);
     const conversation = await this.findOne(tenantId, conversationId, workspaceId);
 
     const message = new this.messageModel({
@@ -155,7 +160,9 @@ export class ConversationsService {
       type: dto.type || 'text',
       content: dto.content,
       media: dto.media,
-      senderId: new Types.ObjectId(senderId),
+      senderId: senderId ? new Types.ObjectId(senderId) : undefined,
+      senderName: senderId ? undefined : 'Automatización',
+      isBot: !senderId,
       status: MessageStatus.SENT,
     });
 

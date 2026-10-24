@@ -92,7 +92,7 @@ export class UsersService {
     const user = await this.userModel
       .findByIdAndUpdate(
         userId,
-        { password: hashedPassword },
+        { password: hashedPassword, passwordChangedAt: new Date() },
         { returnDocument: 'after' },
       )
       .exec();

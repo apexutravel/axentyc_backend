@@ -1,3 +1,4 @@
+import { Throttle } from '@nestjs/throttler';
 import { Controller, Get, Post, Put, Body, Param, Query, Req } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import type { Request } from 'express';
@@ -73,6 +74,8 @@ export class ChatWidgetController {
   @ApiOperation({ summary: 'Get public widget configuration' })
   async getPublicConfig(@Param('widgetId') widgetId: string) {
     const config = await this.chatWidgetService.getWidgetConfigByWidgetId(widgetId);
+    // Enforced at read time too: a downgrade immediately brings the badge back
+    const brandingHidden = config.showBranding === false && (await this.chatWidgetService.canHideBranding(config.tenantId.toString()));
     
     const response = {
       widgetId: config.widgetId,
@@ -84,7 +87,7 @@ export class ChatWidgetController {
       textColor: config.textColor,
       position: config.position,
       avatarUrl: config.avatarUrl,
-      showBranding: config.showBranding,
+      showBranding: !brandingHidden,
       collectEmail: config.collectEmail,
       collectPhone: config.collectPhone,
       offlineMessage: config.offlineMessage,
@@ -95,6 +98,7 @@ export class ChatWidgetController {
   }
 
   @Public()
+  @Throttle({ default: { limit: 40, ttl: 60_000 } })
   @Post('message')
   @ApiOperation({ summary: 'Send message from widget' })
   async sendMessage(@Body() messageDto: WidgetMessageDto) {

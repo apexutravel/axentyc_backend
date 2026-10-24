@@ -1,3 +1,5 @@
+import { AutomationRun, AutomationRunDocument } from './entities/automation-run.entity';
+import { BillingService } from '../billing/billing.service';
 import {
   Injectable,
   NotFoundException,
@@ -13,9 +15,13 @@ export class AutomationsService {
   constructor(
     @InjectModel(Automation.name)
     private automationModel: Model<AutomationDocument>,
+    @InjectModel(AutomationRun.name)
+    private runModel: Model<AutomationRunDocument>,
+    private billingService: BillingService,
   ) {}
 
   async create(tenantId: string, dto: CreateAutomationDto): Promise<Automation> {
+    await this.billingService.assertCanCreateAutomation(tenantId);
     const automation = new this.automationModel({
       ...dto,
       tenantId: new Types.ObjectId(tenantId),
@@ -89,6 +95,13 @@ export class AutomationsService {
     return this.automationModel
       .find(query)
       .exec();
+  }
+
+  async listRuns(tenantId: string, workspaceId?: string, automationId?: string, limit = 50) {
+    const q: any = { tenantId: new Types.ObjectId(tenantId) };
+    if (workspaceId) q.workspaceId = new Types.ObjectId(workspaceId);
+    if (automationId) q.automationId = new Types.ObjectId(automationId);
+    return this.runModel.find(q).sort({ createdAt: -1 }).limit(Math.min(Math.max(limit, 1), 200)).lean();
   }
 
   async incrementExecutionCount(id: string): Promise<void> {

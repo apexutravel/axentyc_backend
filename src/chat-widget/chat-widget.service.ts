@@ -1,3 +1,7 @@
+import { EventEmitter2 } from '@nestjs/event-emitter';
+import { AUTOMATION_EVENT } from '../automations/automation-events';
+import type { AutomationEventPayload } from '../automations/automation-events';
+import { AutomationTrigger } from '../automations/entities/automation.entity';
 import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { ConfigService } from '@nestjs/config';
@@ -26,6 +30,7 @@ export class ChatWidgetService {
     private firebaseAdminService: FirebaseAdminService,
     private usersService: UsersService,
     private billingService: BillingService,
+    private bus: EventEmitter2,
   ) {}
 
   async createWidgetConfig(
@@ -67,6 +72,10 @@ export class ChatWidgetService {
     const plain: any = Object.fromEntries(
       Object.entries({ ...dto }).filter(([, v]) => v !== undefined),
     );
+    // Only plans that include it may hide the AXENTYC badge
+    if (plain.showBranding === false && !(await this.billingService.canRemoveBranding(tenantId))) {
+      plain.showBranding = true;
+    }
     if (plain.workspaceId) {
       plain.workspaceId = new Types.ObjectId(plain.workspaceId as string);
     }
@@ -139,6 +148,10 @@ export class ChatWidgetService {
     return config;
   }
 
+  canHideBranding(tenantId: string): Promise<boolean> {
+    return this.billingService.canRemoveBranding(tenantId);
+  }
+
   async regenerateWidgetId(tenantId: string): Promise<WidgetConfig> {
     const widgetId = this.generateWidgetId();
 
@@ -186,7 +199,9 @@ export class ChatWidgetService {
       (config as any).workspaceId?.toString(),
     );
 
+    let createdNewConversation = false;
     if (!conversation) {
+      createdNewConversation = true;
       // Always create contact - simpler and more reliable
       const contact = await this.conversationsService.createWidgetContact(
         config.tenantId.toString(),
@@ -261,6 +276,14 @@ export class ChatWidgetService {
       conversationId,
       message: messageDoc,
     });
+
+    // Automations: a brand new chat, and the message itself
+    const wsId = (config as any).workspaceId?.toString();
+    const base = { tenantId: config.tenantId.toString(), workspaceId: wsId, conversationId, contactId: contact?._id ? String(contact._id) : undefined, channel: 'web_chat' };
+    if (createdNewConversation) {
+      this.bus.emit(AUTOMATION_EVENT, { ...base, trigger: AutomationTrigger.CONVERSATION_CREATED } as AutomationEventPayload);
+    }
+    this.bus.emit(AUTOMATION_EVENT, { ...base, trigger: AutomationTrigger.MESSAGE_RECEIVED, text: message } as AutomationEventPayload);
 
     // Send FCM push notifications to all users in tenant
     this.sendPushNotificationsToTenant(

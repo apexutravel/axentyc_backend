@@ -6,6 +6,7 @@ import { Contact, ContactSchema } from '../crm/entities/contact.entity';
 import { ConversationsService } from './conversations.service';
 import { ConversationsController } from './conversations.controller';
 import { FacebookModule } from '../facebook/facebook.module';
+import { BillingModule } from '../billing/billing.module';
 import { MembershipsModule } from '../memberships/memberships.module';
 
 @Module({
@@ -16,6 +17,7 @@ import { MembershipsModule } from '../memberships/memberships.module';
       { name: Contact.name, schema: ContactSchema },
     ]),
     MembershipsModule,
+    BillingModule,
     forwardRef(() => FacebookModule),
   ],
   controllers: [ConversationsController],

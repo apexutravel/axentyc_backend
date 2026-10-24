@@ -7,11 +7,14 @@ import {
   Param,
   Delete,
   Query,
+  Res,
 } from '@nestjs/common';
+import type { Response } from 'express';
 import { ApiTags, ApiOperation, ApiBearerAuth, ApiQuery } from '@nestjs/swagger';
 import { ContactsService } from '../services/contacts.service';
 import { CreateContactDto } from '../dto/create-contact.dto';
 import { UpdateContactDto } from '../dto/update-contact.dto';
+import { ImportContactsDto } from '../dto/import-contacts.dto';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { MembershipsService } from '../../memberships/memberships.service';
 
@@ -37,6 +40,22 @@ export class ContactsController {
   async findAll(@CurrentUser() user: any, @Query('workspaceId') workspaceId?: string) {
     await this.membershipsService.assertCanAccessWorkspace(user.tenantId, user._id || user.sub, workspaceId);
     return this.contactsService.findAll(user.tenantId, workspaceId);
+  }
+
+  @Get('export')
+  @ApiOperation({ summary: 'Download all contacts of the workspace as CSV' })
+  async exportCsv(@CurrentUser() user: any, @Res() res: Response, @Query('workspaceId') workspaceId?: string) {
+    await this.membershipsService.assertCanAccessWorkspace(user.tenantId, user._id || user.sub, workspaceId);
+    const csv = await this.contactsService.exportCsv(user.tenantId, workspaceId);
+    res.set({ 'Content-Type': 'text/csv; charset=utf-8', 'Content-Disposition': 'attachment; filename="contacts.csv"' });
+    res.send(csv);
+  }
+
+  @Post('import')
+  @ApiOperation({ summary: 'Import contacts from rows parsed from a CSV (max 2000)' })
+  async importRows(@CurrentUser() user: any, @Body() body: ImportContactsDto) {
+    await this.membershipsService.assertCanAccessWorkspace(user.tenantId, user._id || user.sub, body.workspaceId);
+    return this.contactsService.importRows(user.tenantId, body.workspaceId, body.rows);
   }
 
   @Get(':id')

@@ -1,6 +1,7 @@
 import { Module, forwardRef } from '@nestjs/common';
 import { MongooseModule } from '@nestjs/mongoose';
 import { FacebookService } from './facebook.service';
+import { DeletionRequest, DeletionRequestSchema, MetaDataDeletionService } from './meta-data-deletion.service';
 import { FacebookController } from './facebook.controller';
 import { SocialAccount, SocialAccountSchema } from '../integrations/entities/social-account.entity';
 import { Contact, ContactSchema } from '../crm/entities/contact.entity';
@@ -20,6 +21,7 @@ import { MembershipsModule } from '../memberships/memberships.module';
       { name: Conversation.name, schema: ConversationSchema },
       { name: Message.name, schema: MessageSchema },
       { name: FacebookConfig.name, schema: FacebookConfigSchema },
+      { name: DeletionRequest.name, schema: DeletionRequestSchema },
     ]),
     forwardRef(() => ConversationsModule),
     forwardRef(() => EventsModule),
@@ -27,7 +29,7 @@ import { MembershipsModule } from '../memberships/memberships.module';
     MembershipsModule,
   ],
   controllers: [FacebookController],
-  providers: [FacebookService],
+  providers: [FacebookService, MetaDataDeletionService],
   exports: [FacebookService],
 })
 export class FacebookModule {}

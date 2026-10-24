@@ -19,7 +19,7 @@ describe('FacebookController webhook', () => {
     const configService: any = {
       get: (key: string) => (key === 'FACEBOOK_APP_SECRET' ? secret ?? undefined : undefined),
     };
-    controller = new FacebookController(facebookService, configService, {} as any);
+    controller = new FacebookController(facebookService, configService, {} as any, {} as any);
   };
 
   const req = (headers: Record<string, string>, raw: Buffer | null = rawBody) =>

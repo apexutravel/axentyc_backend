@@ -19,7 +19,7 @@ export class InvitationsService {
     invitedById: string,
     dto: InviteUserDto,
   ): Promise<Invitation> {
-    await this.billingService.assertCanInviteUser(tenantId);
+    await this.billingService.assertCanInviteUser(tenantId, dto.role);
 
     // Check if user already exists or has pending invitation
     const existingInvite = await this.invitationModel.findOne({

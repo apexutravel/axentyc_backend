@@ -49,6 +49,8 @@ export class Automation {
     keywords?: string[];
     status?: string;
     stage?: string;
+    /** minutes before the same rule may fire again for the same conversation (default 60, 0 = always) */
+    cooldownMinutes?: number;
   };
 
   @Prop({

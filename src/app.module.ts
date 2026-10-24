@@ -19,7 +19,13 @@ import { UploadModule } from './upload/upload.module';
 import { EmailsModule } from './emails/emails.module';
 import { FacebookModule } from './facebook/facebook.module';
 import { WorkspacesModule } from './workspaces/workspaces.module';
+import { PlanFeatureGuard, SubscriptionGuard } from './billing/billing.guards';
 import { WorkspaceScopeGuard } from './workspaces/workspace-scope.guard';
+import { ThrottlerModule } from '@nestjs/throttler';
+import { HttpThrottlerGuard } from './common/guards/http-throttler.guard';
+import { ActivitiesModule } from './activities/activities.module';
+import { InvoicingModule } from './invoicing/invoicing.module';
+import { ReportsModule } from './reports/reports.module';
 import { MembershipsModule } from './memberships/memberships.module';
 import { BillingModule } from './billing/billing.module';
 import { JwtAuthGuard } from './auth/guards/jwt-auth.guard';
@@ -37,6 +43,8 @@ import jwtConfig from './config/jwt.config';
       envFilePath: '.env',
     }),
     ScheduleModule.forRoot(),
+    // Global abuse protection; sensitive routes override it with @Throttle
+    ThrottlerModule.forRoot([{ ttl: 60_000, limit: 300 }]),
     MongooseModule.forRootAsync({
       imports: [ConfigModule],
       useFactory: (configService: ConfigService) => ({
@@ -60,10 +68,17 @@ import jwtConfig from './config/jwt.config';
     WorkspacesModule,
     MembershipsModule,
     BillingModule,
+    ActivitiesModule,
+    InvoicingModule,
+    ReportsModule,
   ],
   controllers: [AppController],
   providers: [
     AppService,
+    {
+      provide: APP_GUARD,
+      useClass: HttpThrottlerGuard,
+    },
     {
       provide: APP_GUARD,
       useClass: JwtAuthGuard,
@@ -76,6 +91,14 @@ import jwtConfig from './config/jwt.config';
       // Must stay after JwtAuthGuard: it relies on request.user
       provide: APP_GUARD,
       useClass: WorkspaceScopeGuard,
+    },
+    {
+      provide: APP_GUARD,
+      useClass: SubscriptionGuard,
+    },
+    {
+      provide: APP_GUARD,
+      useClass: PlanFeatureGuard,
     },
     {
       provide: APP_FILTER,

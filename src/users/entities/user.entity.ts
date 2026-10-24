@@ -42,6 +42,10 @@ export class User {
 
   @Prop({ type: [String], default: [] })
   fcmTokens: string[];
+
+  /** Sessions issued before this moment are rejected (set on every password change) */
+  @Prop({ type: Date })
+  passwordChangedAt?: Date;
 }
 
 export const UserSchema = SchemaFactory.createForClass(User);

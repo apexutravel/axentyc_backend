@@ -1,3 +1,7 @@
+import { EventEmitter2 } from '@nestjs/event-emitter';
+import { AUTOMATION_EVENT } from '../../automations/automation-events';
+import type { AutomationEventPayload } from '../../automations/automation-events';
+import { AutomationTrigger } from '../../automations/entities/automation.entity';
 import {
   Injectable,
   NotFoundException,
@@ -16,6 +20,7 @@ export class LeadsService {
     private leadModel: Model<LeadDocument>,
     @InjectModel(Deal.name)
     private dealModel: Model<DealDocument>,
+    private bus: EventEmitter2,
   ) {}
 
   async create(tenantId: string, createLeadDto: CreateLeadDto): Promise<Lead> {
@@ -30,7 +35,15 @@ export class LeadsService {
         ? new Types.ObjectId(createLeadDto.assignedTo)
         : undefined,
     });
-    return lead.save();
+    const saved = await lead.save();
+    this.bus.emit(AUTOMATION_EVENT, {
+      trigger: AutomationTrigger.LEAD_CREATED,
+      tenantId,
+      workspaceId: saved.workspaceId ? String(saved.workspaceId) : undefined,
+      contactId: String(saved.contactId),
+      leadId: String(saved._id),
+    } as AutomationEventPayload);
+    return saved;
   }
 
   async findAll(tenantId: string, workspaceId?: string): Promise<Lead[]> {
@@ -116,6 +129,10 @@ export class LeadsService {
     if (!lead) {
       throw new NotFoundException(`Lead with ID ${id} not found`);
     }
+
+    // Converting twice would duplicate the deal
+    const already = await this.dealModel.findOne({ tenantId: new Types.ObjectId(tenantId), leadId: lead._id });
+    if (already) return already;
 
     const deal = new this.dealModel({
       tenantId: new Types.ObjectId(tenantId),

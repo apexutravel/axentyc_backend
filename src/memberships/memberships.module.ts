@@ -1,4 +1,5 @@
-import { Module } from '@nestjs/common';
+import { Module, forwardRef } from '@nestjs/common';
+import { BillingModule } from '../billing/billing.module';
 import { MongooseModule } from '@nestjs/mongoose';
 import { AccountMember, AccountMemberSchema } from './entities/account-member.entity';
 import { WorkspaceMember, WorkspaceMemberSchema } from './entities/workspace-member.entity';
@@ -9,6 +10,7 @@ import { MembershipsService } from './memberships.service';
 
 @Module({
   imports: [
+    forwardRef(() => BillingModule),
     MongooseModule.forFeature([
       { name: AccountMember.name, schema: AccountMemberSchema },
       { name: WorkspaceMember.name, schema: WorkspaceMemberSchema },

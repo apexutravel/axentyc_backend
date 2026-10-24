@@ -63,7 +63,17 @@ export class Tenant {
     provider?: 'manual' | 'stripe';
     providerCustomerId?: string;
     providerSubscriptionId?: string;
+    /** Stripe price currently billed */
+    providerPriceId?: string;
+    /** Set when the first failed payment happened; drives the grace period */
+    pastDueSince?: Date;
+    /** Paid plan granted without payment (legacy / courtesy). Never expires nor locks. */
+    complimentary?: boolean;
   };
+
+  /** Billing e-mail notices already sent, keyed to avoid duplicates (e.g. trial_3d:2026-07-14) */
+  @Prop({ type: Object })
+  billingNotices?: Record<string, Date>;
 
   @Prop({ type: Object })
   settings?: {
@@ -85,19 +95,7 @@ export class Tenant {
   };
 
   @Prop({ type: Object })
-  limits?: {
-    maxUsers?: number;
-    maxWorkspaces?: number;
-    maxConnectedAssets?: number;
-    maxSocialAccounts?: number;
-    maxEmailIntegrations?: number;
-    maxWidgets?: number;
-    maxConversations?: number;
-    maxLeads?: number;
-    automationsEnabled?: boolean;
-    teamRolesEnabled?: boolean;
-    whiteLabelEnabled?: boolean;
-  };
+  limits?: Record<string, number>;
 
   @Prop({ default: true })
   isActive: boolean;

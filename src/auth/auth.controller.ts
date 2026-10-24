@@ -1,3 +1,5 @@
+import { ForgotPasswordDto, ResetPasswordDto } from './dto/password-reset.dto';
+import { Throttle } from '@nestjs/throttler';
 import { Controller, Post, Body, Get, UseGuards, Res, Req, HttpCode, Param } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import type { Response, Request } from 'express';
@@ -20,6 +22,7 @@ export class AuthController {
   ) {}
 
   @Public()
+  @Throttle({ default: { limit: 5, ttl: 60_000 } })
   @Post('register')
   @ApiOperation({ summary: 'Register a new user' })
   async register(
@@ -34,6 +37,7 @@ export class AuthController {
   }
 
   @Public()
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
   @Post('login')
   @HttpCode(200)
   @ApiOperation({ summary: 'Login user' })
@@ -49,6 +53,26 @@ export class AuthController {
   }
 
   @Public()
+  @Throttle({ default: { limit: 5, ttl: 60_000 } })
+  @Post('forgot-password')
+  @HttpCode(200)
+  @ApiOperation({ summary: 'Send a password reset link (always answers the same)' })
+  async forgotPassword(@Body() dto: ForgotPasswordDto) {
+    await this.authService.forgotPassword(dto.email);
+    return { success: true };
+  }
+
+  @Public()
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
+  @Post('reset-password')
+  @HttpCode(200)
+  @ApiOperation({ summary: 'Set a new password with a reset token' })
+  async resetPassword(@Body() dto: ResetPasswordDto) {
+    await this.authService.resetPassword(dto.token, dto.password);
+    return { success: true };
+  }
+
+  @Public()
   @Post('refresh')
   @UseGuards(RefreshTokenGuard)
   @ApiOperation({ summary: 'Refresh access token' })
@@ -60,6 +84,7 @@ export class AuthController {
       req.user?.['sub'],
       req.user?.['tenantId'],
       req.user?.['role'],
+      req.user?.['iat'],
     );
     
     res.cookie('access_token', access_token, {
@@ -121,6 +146,7 @@ export class AuthController {
   }
 
   @Public()
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
   @Post('accept-invite')
   @ApiOperation({ summary: 'Accept invitation and create user account' })
   async acceptInvite(

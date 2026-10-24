@@ -12,6 +12,7 @@ import { ApiTags, ApiOperation, ApiBearerAuth, ApiQuery } from '@nestjs/swagger'
 import { LeadsService } from '../services/leads.service';
 import { CreateLeadDto } from '../dto/create-lead.dto';
 import { UpdateLeadDto } from '../dto/update-lead.dto';
+import { RequiresFeature } from '../../billing/billing.guards';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { MembershipsService } from '../../memberships/memberships.service';
 
@@ -72,9 +73,11 @@ export class LeadsController {
     return this.leadsService.remove(user.tenantId, id, workspaceId);
   }
 
+  @RequiresFeature('deals')
   @Post(':id/convert')
   @ApiOperation({ summary: 'Convert lead to deal' })
-  async convertToDeal(@CurrentUser() user: any, @Param('id') id: string, @Query('workspaceId') workspaceId?: string) {
+  async convertToDeal(@CurrentUser() user: any, @Param('id') id: string, @Query('workspaceId') queryWs?: string, @Body('workspaceId') bodyWs?: string) {
+    const workspaceId = queryWs || bodyWs;
     await this.membershipsService.assertCanAccessWorkspace(user.tenantId, user._id || user.sub, workspaceId);
     return this.leadsService.convertToDeal(user.tenantId, id, workspaceId);
   }

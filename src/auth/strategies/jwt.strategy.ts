@@ -27,6 +27,11 @@ export class JwtStrategy extends PassportStrategy(Strategy, 'jwt') {
     if (!user) {
       throw new UnauthorizedException();
     }
+    // A password change / reset ends every session that was opened before it
+    const changedAt = (user as any).passwordChangedAt as Date | undefined;
+    if (changedAt && payload.iat && payload.iat * 1000 < changedAt.getTime() - 1000) {
+      throw new UnauthorizedException();
+    }
     return {
       _id: payload.sub,
       sub: payload.sub,

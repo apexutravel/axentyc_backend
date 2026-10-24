@@ -1,3 +1,7 @@
+import { EventEmitter2 } from '@nestjs/event-emitter';
+import { AUTOMATION_EVENT } from '../../automations/automation-events';
+import type { AutomationEventPayload } from '../../automations/automation-events';
+import { AutomationTrigger } from '../../automations/entities/automation.entity';
 import {
   Injectable,
   NotFoundException,
@@ -13,6 +17,7 @@ export class DealsService {
   constructor(
     @InjectModel(Deal.name)
     private dealModel: Model<DealDocument>,
+    private bus: EventEmitter2,
   ) {}
 
   async create(tenantId: string, createDealDto: CreateDealDto): Promise<Deal> {
@@ -85,6 +90,7 @@ export class DealsService {
       updateData.actualCloseDate = new Date();
     }
 
+    const before = await this.dealModel.findOne(query).select('stage').lean();
     const deal = await this.dealModel
       .findOneAndUpdate(
         query,
@@ -95,6 +101,17 @@ export class DealsService {
       .exec();
     if (!deal) {
       throw new NotFoundException(`Deal with ID ${id} not found`);
+    }
+    const base = {
+      tenantId,
+      workspaceId: deal.workspaceId ? String(deal.workspaceId) : undefined,
+      contactId: String((deal.contactId as any)?._id ?? deal.contactId),
+      dealId: String(deal._id),
+      stage: deal.stage,
+    };
+    this.bus.emit(AUTOMATION_EVENT, { ...base, trigger: AutomationTrigger.DEAL_UPDATED } as AutomationEventPayload);
+    if (before && before.stage !== deal.stage) {
+      this.bus.emit(AUTOMATION_EVENT, { ...base, trigger: AutomationTrigger.DEAL_STAGE_CHANGED } as AutomationEventPayload);
     }
     return deal;
   }

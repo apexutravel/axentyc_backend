@@ -2,13 +2,17 @@ import { Body, Controller, Delete, Get, Param, Post, Query } from '@nestjs/commo
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { MembershipsService } from './memberships.service';
+import { BillingService } from '../billing/billing.service';
 import { SetWorkspaceAccessDto } from './dto/set-workspace-access.dto';
 
 @ApiTags('memberships')
 @ApiBearerAuth()
 @Controller('memberships')
 export class MembershipsController {
-  constructor(private readonly membershipsService: MembershipsService) {}
+  constructor(
+    private readonly membershipsService: MembershipsService,
+    private readonly billingService: BillingService,
+  ) {}
 
   @Get('me/accounts')
   @ApiOperation({ summary: 'List accounts the current user belongs to' })
@@ -43,6 +47,8 @@ export class MembershipsController {
   @ApiOperation({ summary: 'Grant or update workspace access for a user' })
   async setWorkspaceAccess(@CurrentUser() user: any, @Body() dto: SetWorkspaceAccessDto) {
     await this.membershipsService.assertCanManageAccount(user.tenantId, user._id || user.sub);
+    // Roles other than "agent" need a plan with team roles
+    await this.billingService.assertRoleAllowed(user.tenantId, dto.role);
     return this.membershipsService.setWorkspaceAccess({
       tenantId: user.tenantId,
       workspaceId: dto.workspaceId,
