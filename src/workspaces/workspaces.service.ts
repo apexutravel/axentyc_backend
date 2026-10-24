@@ -1,4 +1,4 @@
-import { ConflictException, ForbiddenException, Injectable, Logger, NotFoundException, OnModuleInit } from '@nestjs/common';
+import { BadRequestException, ConflictException, ForbiddenException, Injectable, Logger, NotFoundException, OnModuleInit } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 import { Workspace, WorkspaceDocument, WorkspaceType } from './entities/workspace.entity';
@@ -25,6 +25,10 @@ function toSlug(value: string): string {
     .replace(/[\u0300-\u036f]/g, '')
     .replace(/[^a-z0-9]+/g, '-')
     .replace(/^-+|-+$/g, '') || 'workspace';
+}
+
+function exactName(value: string): RegExp {
+  return new RegExp(`^${value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i');
 }
 
 @Injectable()
@@ -68,18 +72,14 @@ export class WorkspacesService implements OnModuleInit {
   async create(tenantId: string, dto: CreateWorkspaceDto): Promise<Workspace> {
     await this.billingService.assertCanCreateWorkspace(tenantId);
 
-    const slug = dto.slug ? toSlug(dto.slug) : toSlug(dto.name);
-    const existing = await this.workspaceModel.findOne({
-      tenantId: new Types.ObjectId(tenantId),
-      slug,
-    });
-
-    if (existing) {
-      throw new ConflictException('Workspace with this slug already exists');
-    }
+    const name = dto.name.trim();
+    if (!name) throw new BadRequestException('Workspace name is required');
+    const slug = toSlug(dto.slug || name);
+    await this.assertAvailable(tenantId, name, slug);
 
     const workspace = new this.workspaceModel({
       ...dto,
+      name,
       tenantId: new Types.ObjectId(tenantId),
       slug,
       type: dto.type || WorkspaceType.DEFAULT,
@@ -89,7 +89,13 @@ export class WorkspacesService implements OnModuleInit {
       tenantId: new Types.ObjectId(tenantId),
       isActive: true,
     });
-    const saved = await workspace.save();
+    let saved: WorkspaceDocument;
+    try {
+      saved = await workspace.save();
+    } catch (error: any) {
+      if (error?.code === 11000) throw new ConflictException('Workspace name or slug already exists');
+      throw error;
+    }
 
     // The first workspace of an account adopts the data created before workspaces existed
     if (!hadActive) {
@@ -173,15 +179,57 @@ export class WorkspacesService implements OnModuleInit {
     return workspace;
   }
 
-  async update(tenantId: string, id: string, dto: UpdateWorkspaceDto): Promise<Workspace> {
-    const updateData: any = { ...dto };
-    if (dto.slug) updateData.slug = toSlug(dto.slug);
+  async checkAvailability(tenantId: string, name?: string, slug?: string, excludeId?: string) {
+    const cleanName = (name || '').trim();
+    const cleanSlug = toSlug(slug || cleanName);
+    const base: any = { tenantId: new Types.ObjectId(tenantId) };
+    if (excludeId && Types.ObjectId.isValid(excludeId)) base._id = { $ne: new Types.ObjectId(excludeId) };
 
-    const workspace = await this.workspaceModel.findOneAndUpdate(
-      { _id: id, tenantId: new Types.ObjectId(tenantId) },
-      updateData,
-      { returnDocument: 'after' },
-    );
+    const [nameExists, slugExists] = await Promise.all([
+      cleanName ? this.workspaceModel.exists({ ...base, name: exactName(cleanName) }) : false,
+      cleanSlug ? this.workspaceModel.exists({ ...base, slug: cleanSlug }) : false,
+    ]);
+
+    return {
+      name: cleanName,
+      slug: cleanSlug,
+      nameAvailable: !!cleanName && !nameExists,
+      slugAvailable: !!cleanSlug && !slugExists,
+    };
+  }
+
+  private async assertAvailable(tenantId: string, name: string, slug: string, excludeId?: string) {
+    const availability = await this.checkAvailability(tenantId, name, slug, excludeId);
+    if (!availability.nameAvailable && !availability.slugAvailable) {
+      throw new ConflictException('Workspace name and slug already exist');
+    }
+    if (!availability.nameAvailable) throw new ConflictException('Workspace name already exists');
+    if (!availability.slugAvailable) throw new ConflictException('Workspace slug already exists');
+  }
+
+  async update(tenantId: string, id: string, dto: UpdateWorkspaceDto): Promise<Workspace> {
+    const current = await this.workspaceModel.findOne({ _id: id, tenantId: new Types.ObjectId(tenantId) });
+    if (!current) throw new NotFoundException('Workspace not found');
+
+    const updateData: any = { ...dto };
+    const name = dto.name !== undefined ? dto.name.trim() : current.name;
+    if (!name) throw new BadRequestException('Workspace name is required');
+    const slug = dto.slug !== undefined ? toSlug(dto.slug || name) : current.slug;
+    await this.assertAvailable(tenantId, name, slug, id);
+    updateData.name = name;
+    updateData.slug = slug;
+
+    let workspace: WorkspaceDocument | null;
+    try {
+      workspace = await this.workspaceModel.findOneAndUpdate(
+        { _id: id, tenantId: new Types.ObjectId(tenantId) },
+        updateData,
+        { returnDocument: 'after', runValidators: true },
+      );
+    } catch (error: any) {
+      if (error?.code === 11000) throw new ConflictException('Workspace name or slug already exists');
+      throw error;
+    }
 
     if (!workspace) {
       throw new NotFoundException('Workspace not found');

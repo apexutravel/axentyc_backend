@@ -1,8 +1,21 @@
 const { run } = require('./harness');
 
 // The whole sales journey, exactly as a customer would do it.
-run('SALES JOURNEY: product -> contact -> lead -> deal -> quote -> invoice -> payment -> reports', async ({ ok, call, db, O }) => {
-  let r = await call('POST', '/products', { name: 'Diseño de logo', unitPriceCents: 25000, taxable: true });
+run('SALES JOURNEY: product -> contact -> lead -> deal -> quote -> invoice -> payment -> reports', async ({ ok, call, db, O, BASE, token }) => {
+  let r = await call('GET', '/workspaces/availability?name=Caf%C3%A9%20Norte&slug=cafe-norte');
+  ok(r.status === 200 && r.data.nameAvailable && r.data.slugAvailable && r.data.slug === 'cafe-norte', 'workspace name + slug availability');
+  const workspaceResponse = await fetch(`${BASE}/workspaces`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Cookie: `access_token=${token}` },
+    body: JSON.stringify({ name: 'Café Norte' }),
+  });
+  const workspaceJson = await workspaceResponse.json();
+  const workspace = workspaceJson.data || workspaceJson;
+  ok(workspaceResponse.status === 201 && workspace.slug === 'cafe-norte', 'workspace slug follows the complete normalized name', workspaceJson);
+  r = await call('GET', '/workspaces/availability?name=Caf%C3%A9%20Norte&slug=cafe-norte');
+  ok(r.status === 200 && !r.data.nameAvailable && !r.data.slugAvailable, 'created workspace name + slug become unavailable');
+
+  r = await call('POST', '/products', { name: 'Diseño de logo', unitPriceCents: 25000, taxable: true });
   ok(r.status === 201, '1. create product/service', r.json);
   const product = r.data;
   r = await call('POST', '/products', { name: 'Hosting anual', unitPriceCents: 12000, taxable: false });

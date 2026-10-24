@@ -1,4 +1,4 @@
-import { Body, Controller, Delete, Get, Param, Patch, Post } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, Patch, Post, Query } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { WorkspacesService } from './workspaces.service';
@@ -43,6 +43,18 @@ export class WorkspacesController {
   async backfillDefault(@CurrentUser() user: any) {
     await this.membershipsService.assertCanManageAccount(user.tenantId, user._id || user.sub);
     return this.workspacesService.backfillDefaultWorkspace(user.tenantId);
+  }
+
+  @Get('availability')
+  @ApiOperation({ summary: 'Check whether a workspace name and slug are available' })
+  async availability(
+    @CurrentUser() user: any,
+    @Query('name') name?: string,
+    @Query('slug') slug?: string,
+    @Query('excludeId') excludeId?: string,
+  ) {
+    await this.membershipsService.assertCanManageAccount(user.tenantId, user._id || user.sub);
+    return this.workspacesService.checkAvailability(user.tenantId, name, slug, excludeId);
   }
 
   @Get(':id')

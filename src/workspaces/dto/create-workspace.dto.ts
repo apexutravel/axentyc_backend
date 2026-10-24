@@ -1,4 +1,4 @@
-import { IsEnum, IsObject, IsOptional, IsString, IsNotEmpty } from 'class-validator';
+import { IsEnum, IsObject, IsOptional, IsString, IsNotEmpty, MaxLength } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { WorkspaceType } from '../entities/workspace.entity';
 
@@ -6,11 +6,13 @@ export class CreateWorkspaceDto {
   @ApiProperty({ example: 'Cliente A - Restaurante' })
   @IsString()
   @IsNotEmpty()
+  @MaxLength(100)
   name: string;
 
   @ApiPropertyOptional({ example: 'cliente-a-restaurante' })
   @IsString()
   @IsOptional()
+  @MaxLength(100)
   slug?: string;
 
   @ApiPropertyOptional({ example: 'Workspace para la marca o cliente Restaurante' })
