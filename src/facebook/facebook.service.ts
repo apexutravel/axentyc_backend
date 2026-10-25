@@ -842,6 +842,187 @@ export class FacebookService {
     }
   }
 
+  /** What the UI needs to tell the user whether Instagram will really receive events. */
+  async getInstagramLinkStatus(
+    tenantId: string,
+    instagramAccountId?: string,
+  ): Promise<{ linked: boolean; webhookSubscribed?: boolean; webhookError?: string | null }> {
+    if (!instagramAccountId) return { linked: false };
+    const ig = await this.socialAccountModel
+      .findOne({
+        tenantId: new Types.ObjectId(tenantId),
+        platform: SocialPlatform.INSTAGRAM,
+        accountId: instagramAccountId,
+        status: SocialAccountStatus.CONNECTED,
+      })
+      .select('metadata')
+      .lean();
+    if (!ig) return { linked: false };
+    return {
+      linked: true,
+      webhookSubscribed: ig.metadata?.webhookSubscribed !== false,
+      webhookError: ig.metadata?.webhookError ?? null,
+    };
+  }
+
+  // ─── Instagram comments (live from the Graph API) ───
+
+  private async getConnectedInstagram(
+    tenantId: string,
+    accountId: string,
+  ): Promise<SocialAccountDocument> {
+    const account = await this.socialAccountModel.findOne({
+      tenantId: new Types.ObjectId(tenantId),
+      platform: SocialPlatform.INSTAGRAM,
+      accountId,
+      status: SocialAccountStatus.CONNECTED,
+    });
+    if (!account?.accessToken) {
+      throw new BadRequestException(
+        'Instagram account not connected or missing access token',
+      );
+    }
+    return account;
+  }
+
+  private async igGraph(
+    account: SocialAccountDocument,
+    path: string,
+    method: 'GET' | 'POST' | 'DELETE' = 'GET',
+    params: Record<string, string> = {},
+  ): Promise<any> {
+    const body = new URLSearchParams({
+      ...params,
+      access_token: account.accessToken!,
+    });
+    const url = `${this.graphApiUrl}/${path}`;
+    const resp =
+      method === 'GET'
+        ? await fetch(`${url}?${body.toString()}`)
+        : await fetch(method === 'DELETE' ? `${url}?${body}` : url, {
+            method,
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+            body: method === 'POST' ? body.toString() : undefined,
+          });
+    const data = (await resp.json().catch(() => ({}))) as any;
+    if (data?.error) {
+      if (data.error.code === 190) {
+        await this.socialAccountModel.updateOne(
+          { _id: account._id },
+          { $set: { status: SocialAccountStatus.ERROR } },
+        );
+      }
+      throw new BadRequestException(
+        data.error.message || 'Instagram request failed',
+      );
+    }
+    return data;
+  }
+
+  /** Recent Instagram posts with their comments, shaped like the Facebook feed so the UI can share its layout. */
+  async getInstagramFeed(
+    tenantId: string,
+    accountId: string,
+    limit = 20,
+  ): Promise<{ accountId: string; posts: any[] }> {
+    const account = await this.getConnectedInstagram(tenantId, accountId);
+    const reply = 'id,text,username,timestamp,like_count,hidden';
+    const fields = [
+      'id',
+      'caption',
+      'media_type',
+      'media_url',
+      'thumbnail_url',
+      'permalink',
+      'timestamp',
+      'like_count',
+      'comments_count',
+      `comments.limit(50){${reply},replies.limit(50){${reply}}}`,
+    ].join(',');
+    const data = await this.igGraph(account, `${accountId}/media`, 'GET', {
+      fields,
+      limit: String(Math.min(Math.max(limit, 1), 50)),
+    });
+
+    const ownName = (account.accountName || '').toLowerCase();
+    const toComment = (c: any, parentId?: string) => ({
+      id: c.id,
+      from: {
+        id: c.username || 'instagram',
+        name: c.username ? `@${c.username}` : 'Instagram',
+        isOwn: !!c.username && c.username.toLowerCase() === ownName,
+      },
+      message: c.text || '',
+      created_time: c.timestamp,
+      like_count: c.like_count || 0,
+      hidden: !!c.hidden,
+      ...(parentId ? { parent: { id: parentId } } : {}),
+    });
+
+    const posts = (Array.isArray(data?.data) ? data.data : []).map(
+      (m: any) => {
+        const flat: any[] = [];
+        for (const c of m.comments?.data || []) {
+          flat.push(toComment(c));
+          for (const r of c.replies?.data || []) flat.push(toComment(r, c.id));
+        }
+        return {
+          id: m.id,
+          message: m.caption || '',
+          full_picture: m.media_type === 'VIDEO' ? m.thumbnail_url : m.media_url,
+          permalink_url: m.permalink,
+          created_time: m.timestamp,
+          media_type: m.media_type,
+          like_count: m.like_count || 0,
+          comments_count: m.comments_count ?? flat.length,
+          comments: { data: flat },
+        };
+      },
+    );
+    return { accountId, posts };
+  }
+
+  /** Reply to a comment (commentId) or add a new top-level comment on a post (mediaId). */
+  async replyToInstagramComment(
+    tenantId: string,
+    accountId: string,
+    message: string,
+    target: { commentId?: string; mediaId?: string },
+  ): Promise<{ success: boolean; commentId?: string }> {
+    const text = (message || '').trim();
+    if (!text) throw new BadRequestException('message is required');
+    if (!target.commentId && !target.mediaId) {
+      throw new BadRequestException('commentId or mediaId is required');
+    }
+    const account = await this.getConnectedInstagram(tenantId, accountId);
+    const path = target.commentId
+      ? `${target.commentId}/replies`
+      : `${target.mediaId}/comments`;
+    const data = await this.igGraph(account, path, 'POST', { message: text });
+    return { success: true, commentId: data?.id };
+  }
+
+  async hideInstagramComment(
+    tenantId: string,
+    accountId: string,
+    commentId: string,
+    hide: boolean,
+  ): Promise<{ success: boolean }> {
+    const account = await this.getConnectedInstagram(tenantId, accountId);
+    await this.igGraph(account, commentId, 'POST', { hide: String(hide) });
+    return { success: true };
+  }
+
+  async deleteInstagramComment(
+    tenantId: string,
+    accountId: string,
+    commentId: string,
+  ): Promise<{ success: boolean }> {
+    const account = await this.getConnectedInstagram(tenantId, accountId);
+    await this.igGraph(account, commentId, 'DELETE');
+    return { success: true };
+  }
+
   // Get tenant-specific Facebook config from database (DEPRECATED - kept for migration)
   private async getTenantConfig(
     tenantId: string,
@@ -1333,6 +1514,7 @@ export class FacebookService {
     await this.subscribePageToWebhook(pageId, pageAccessToken);
 
     // Check if page has Instagram linked
+    let igWebhookError: string | undefined;
     if (instagramAccount?.id) {
       this.logger.log(
         `Instagram account @${instagramAccount.username} detected for page ${pageId}`,
@@ -1344,8 +1526,9 @@ export class FacebookService {
           pageAccessToken,
         );
       } catch (err) {
+        igWebhookError = err.message || 'Instagram webhook subscription failed';
         this.logger.warn(
-          `Instagram webhook subscription failed for @${instagramAccount.username}: ${err.message}. Facebook page will still be connected.`,
+          `Instagram webhook subscription failed for @${instagramAccount.username}: ${igWebhookError}. Facebook page will still be connected.`,
         );
       }
     }
@@ -1408,6 +1591,9 @@ export class FacebookService {
             followersCount: instagramAccount.followersCount,
             linkedPageId: pageId,
             fbUserId: metadata?.fbUserId,
+            // Surfaced in the UI: a "connected" account with no webhook never receives events
+            webhookSubscribed: !igWebhookError,
+            webhookError: igWebhookError || null,
           },
           isActive: true,
         },

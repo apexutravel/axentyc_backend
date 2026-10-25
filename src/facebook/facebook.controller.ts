@@ -278,7 +278,12 @@ export class FacebookController {
     );
     this.facebookService.discardPendingPageSelection(body.selectionToken);
 
-    return { success: true, account: this.stripSecrets(account) };
+    const instagram = await this.facebookService.getInstagramLinkStatus(
+      user.tenantId,
+      page.instagramAccount?.id,
+    );
+
+    return { success: true, account: this.stripSecrets(account), instagram };
   }
 
   @Get('integrations/facebook/status')
@@ -478,6 +483,86 @@ export class FacebookController {
     return this.facebookService.deleteComment(
       user.tenantId,
       body.pageId,
+      body.commentId,
+    );
+  }
+
+  @Get('integrations/instagram/feed')
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary: 'Recent Instagram posts with their comments (live from Graph API)',
+  })
+  async getInstagramFeed(
+    @CurrentUser() user: any,
+    @Query('accountId') accountId: string,
+    @Query('limit') limit?: string,
+  ) {
+    if (!accountId) return { success: false, message: 'accountId is required' };
+    const parsed = limit ? parseInt(limit, 10) : 20;
+    return this.facebookService.getInstagramFeed(
+      user.tenantId,
+      accountId,
+      Number.isFinite(parsed) ? parsed : 20,
+    );
+  }
+
+  @Post('integrations/instagram/reply-comment')
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary: 'Reply to an Instagram comment, or comment on a post (mediaId)',
+  })
+  async replyInstagramComment(
+    @CurrentUser() user: any,
+    @Body()
+    body: {
+      accountId: string;
+      message: string;
+      commentId?: string;
+      mediaId?: string;
+    },
+  ) {
+    if (!body?.accountId || !body?.message) {
+      return { success: false, message: 'accountId and message are required' };
+    }
+    return this.facebookService.replyToInstagramComment(
+      user.tenantId,
+      body.accountId,
+      body.message,
+      { commentId: body.commentId, mediaId: body.mediaId },
+    );
+  }
+
+  @Post('integrations/instagram/hide-comment')
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Hide/unhide an Instagram comment' })
+  async hideInstagramComment(
+    @CurrentUser() user: any,
+    @Body() body: { accountId: string; commentId: string; hide: boolean },
+  ) {
+    if (!body?.accountId || !body?.commentId) {
+      return { success: false, message: 'accountId and commentId are required' };
+    }
+    return this.facebookService.hideInstagramComment(
+      user.tenantId,
+      body.accountId,
+      body.commentId,
+      !!body.hide,
+    );
+  }
+
+  @Post('integrations/instagram/delete-comment')
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Delete an Instagram comment' })
+  async deleteInstagramComment(
+    @CurrentUser() user: any,
+    @Body() body: { accountId: string; commentId: string },
+  ) {
+    if (!body?.accountId || !body?.commentId) {
+      return { success: false, message: 'accountId and commentId are required' };
+    }
+    return this.facebookService.deleteInstagramComment(
+      user.tenantId,
+      body.accountId,
       body.commentId,
     );
   }
