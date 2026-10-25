@@ -18,7 +18,7 @@
     "test:cov": "jest --coverage",
     "test:debug": "node --inspect-brk -r tsconfig-paths/register -r ts-node/register node_modules/.bin/jest --runInBand",
     "test:e2e": "jest --config ./test/jest-e2e.json",
-    "test:smoke": "node test/smoke/flow.smoke.js && node test/smoke/crm.smoke.js && node test/smoke/widget.smoke.js && node test/smoke/security.smoke.js"
+    "test:smoke": "node test/smoke/flow.smoke.js && node test/smoke/crm.smoke.js && node test/smoke/inbox.smoke.js && node test/smoke/widget.smoke.js && node test/smoke/security.smoke.js"
   },
   "dependencies": {
     "@nestjs/common": "^11.0.1",

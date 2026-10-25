@@ -98,9 +98,10 @@ export class FacebookService {
 
   @Cron('*/3 * * * *') // Every 3 minutes
   async autoSyncComments() {
+    // Safety net behind the webhook: on unless explicitly disabled
     const enabled =
-      this.configService.get<string>('FACEBOOK_COMMENTS_POLLING_ENABLED') ===
-      'true';
+      this.configService.get<string>('FACEBOOK_COMMENTS_POLLING_ENABLED') !==
+      'false';
     if (!enabled) {
       return;
     }
@@ -164,6 +165,237 @@ export class FacebookService {
     } catch (e: any) {
       this.logger.error(`[Auto-Sync] Fatal error: ${e.message}`);
     }
+  }
+
+  // ─── Instagram safety net: poll every minute so nothing depends on the webhook alone ───
+
+  private igPolling = false;
+  private readonly igLastPoll = new Map<string, number>(); // tenantId -> last successful poll start
+  private readonly igWebhookMarked = new Map<string, number>(); // igAccountId -> last DB write
+
+  /** Remember that Meta really delivered an Instagram event (shown in the UI as "tiempo real"). */
+  private markInstagramWebhook(igAccountId: string) {
+    const now = Date.now();
+    if (now - (this.igWebhookMarked.get(igAccountId) || 0) < 30_000) return;
+    this.igWebhookMarked.set(igAccountId, now);
+    this.socialAccountModel
+      .updateMany(
+        { platform: SocialPlatform.INSTAGRAM, accountId: igAccountId },
+        { $set: { 'metadata.lastWebhookAt': new Date(now) } },
+      )
+      .catch(() => undefined);
+  }
+
+  @Cron('*/1 * * * *')
+  async autoSyncInstagram() {
+    if (this.configService.get<string>('META_POLLING_ENABLED') === 'false') return;
+    if (this.igPolling) return;
+    this.igPolling = true;
+    try {
+      const accounts = await this.socialAccountModel
+        .find({
+          platform: SocialPlatform.INSTAGRAM,
+          status: SocialAccountStatus.CONNECTED,
+        })
+        .select('tenantId')
+        .lean();
+      const tenants = [...new Set(accounts.map((a) => String(a.tenantId)))];
+
+      for (const tenantId of tenants) {
+        const startedAt = Date.now();
+        // First run after a restart looks back 24h; afterwards only what changed since the last pass
+        const last = this.igLastPoll.get(tenantId) ?? Date.now() - 24 * 3600 * 1000;
+        const since = new Date(last - 2 * 60 * 1000);
+        try {
+          const dms = await this.syncInstagramMessages(tenantId, { since });
+          const comments = await this.syncInstagramComments(tenantId, { since });
+          this.igLastPoll.set(tenantId, startedAt);
+          if (dms.newMessages || comments.newComments) {
+            this.logger.log(
+              `[IG Auto-Sync] tenant ${tenantId}: ${dms.newMessages} DMs, ${comments.newComments} comments`,
+            );
+          }
+        } catch (e: any) {
+          this.logger.error(`[IG Auto-Sync] tenant ${tenantId}: ${e?.message || e}`);
+        }
+      }
+    } catch (e: any) {
+      this.logger.error(`[IG Auto-Sync] fatal: ${e?.message || e}`);
+    } finally {
+      this.igPolling = false;
+    }
+  }
+
+  /**
+   * Fetch recent Instagram comments and treat unseen ones exactly like a webhook delivery:
+   * stored, unread counter, real-time events and automations. Dedupes by comment id.
+   * Polling cannot see the commenter's IGSID, only the username, so contacts are matched by username.
+   */
+  async syncInstagramComments(
+    tenantId: string,
+    opts: { since?: Date } = {},
+  ): Promise<{ newComments: number }> {
+    const result = { newComments: 0 };
+    const accounts = await this.socialAccountModel.find({
+      tenantId: new Types.ObjectId(tenantId),
+      platform: SocialPlatform.INSTAGRAM,
+      status: SocialAccountStatus.CONNECTED,
+    });
+
+    for (const account of accounts) {
+      if (!account.accountId || !account.accessToken) continue;
+      try {
+        const reply = 'id,text,username,timestamp';
+        const data = await this.igGraph(account, `${account.accountId}/media`, 'GET', {
+          fields: `id,timestamp,comments.limit(50){${reply},replies.limit(25){${reply}}}`,
+          limit: '10',
+        });
+        const ownName = (account.accountName || '').toLowerCase();
+
+        const flat: { mediaId: string; c: any }[] = [];
+        for (const m of data?.data || []) {
+          for (const c of m.comments?.data || []) {
+            flat.push({ mediaId: m.id, c });
+            for (const r of c.replies?.data || []) flat.push({ mediaId: m.id, c: r });
+          }
+        }
+        // Oldest first so the conversation ends on the newest comment
+        flat.sort((a, b) => new Date(a.c.timestamp).getTime() - new Date(b.c.timestamp).getTime());
+
+        for (const { mediaId, c } of flat) {
+          const username: string | undefined = c.username;
+          if (!c.id || !username || !c.text) continue;
+          if (username.toLowerCase() === ownName) continue;
+          if (opts.since && new Date(c.timestamp).getTime() < opts.since.getTime()) continue;
+          if (
+            await this.messageModel.exists({
+              tenantId: new Types.ObjectId(tenantId),
+              'metadata.commentId': c.id,
+            })
+          ) {
+            continue;
+          }
+
+          const contact = await this.getOrCreateInstagramContactByUsername(
+            tenantId,
+            username,
+            account.workspaceId,
+          );
+          const conversation = await this.getOrCreateInstagramCommentConversation(
+            tenantId,
+            contact._id.toString(),
+            contact.customFields?.instagramPsid || `@${username}`,
+            mediaId,
+            account.accountId,
+            account.accountName,
+          );
+
+          const saved = await new this.messageModel({
+            tenantId: new Types.ObjectId(tenantId),
+            workspaceId: (conversation as any).workspaceId,
+            conversationId: conversation._id,
+            direction: MessageDirection.INBOUND,
+            type: MessageType.TEXT,
+            content: c.text,
+            senderName: contact.name,
+            status: MessageStatus.SENT,
+            metadata: {
+              commentId: c.id,
+              mediaId,
+              platform: 'instagram',
+              isComment: true,
+              polled: true,
+              commentCreatedAt: c.timestamp,
+            },
+          }).save();
+
+          const viewed = this.eventsGateway.isConversationBeingViewed(
+            conversation._id.toString(),
+          );
+          const updated = await this.conversationModel
+            .findByIdAndUpdate(
+              conversation._id,
+              {
+                lastMessage: c.text,
+                lastMessageAt: new Date(),
+                status: ConversationStatus.OPEN,
+                $inc: { unreadCount: viewed ? 0 : 1 },
+              },
+              { new: true },
+            )
+            .populate('contactId')
+            .lean();
+          if (updated) this.eventsGateway.emitConversationUpdated(tenantId, updated);
+          this.eventsGateway.emitMessageReceived(
+            tenantId,
+            conversation._id.toString(),
+            saved,
+            contact,
+          );
+          this.eventsGateway.emitToTenant(tenantId, 'ig.comment.new', {
+            workspaceId: account.workspaceId?.toString(),
+            mediaId,
+            accountId: account.accountId,
+            comment: {
+              id: c.id,
+              from: { id: username, username },
+              text: c.text,
+              created_time: c.timestamp,
+            },
+          });
+          this.bus.emit(AUTOMATION_EVENT, {
+            trigger: AutomationTrigger.MESSAGE_RECEIVED,
+            tenantId,
+            workspaceId: account.workspaceId ? String(account.workspaceId) : undefined,
+            conversationId: String(conversation._id),
+            contactId: String(contact._id),
+            channel: 'instagram',
+            text: c.text,
+          } as AutomationEventPayload);
+          result.newComments++;
+        }
+      } catch (e: any) {
+        this.logger.warn(
+          `[IG Comments Sync] @${account.accountName}: ${e?.message || e}`,
+        );
+      }
+    }
+    return result;
+  }
+
+  private async getOrCreateInstagramContactByUsername(
+    tenantId: string,
+    username: string,
+    workspaceId?: Types.ObjectId | string,
+  ): Promise<ContactDocument> {
+    const scope: any = { tenantId: new Types.ObjectId(tenantId) };
+    if (workspaceId) scope.workspaceId = new Types.ObjectId(workspaceId.toString());
+    const handle = username.toLowerCase();
+    const existing = await this.contactModel.findOne({
+      ...scope,
+      $or: [
+        { 'socialProfiles.instagram.username': username },
+        { 'customFields.instagramUsername': handle },
+      ],
+    });
+    if (existing) return existing;
+
+    const contact = await new this.contactModel({
+      ...scope,
+      name: `@${username}`,
+      source: ContactSource.INSTAGRAM,
+      tags: ['instagram'],
+      customFields: { instagramUsername: handle },
+      socialProfiles: { instagram: { id: username, username } },
+    }).save();
+    this.bus.emit(AUTOMATION_EVENT, {
+      trigger: AutomationTrigger.CONTACT_CREATED,
+      tenantId,
+      workspaceId: contact.workspaceId ? String(contact.workspaceId) : undefined,
+      contactId: String(contact._id),
+      channel: 'instagram',
+    } as AutomationEventPayload);
+    return contact;
   }
 
   private markWebhookReceived(pageId: string) {
@@ -2140,6 +2372,7 @@ export class FacebookService {
               // Instagram DM (recipient is the Instagram Business Account ID)
               platform = 'instagram';
               accountId = igAccount.accountId;
+              this.markInstagramWebhook(String(igAccount.accountId));
               this.logger.log(
                 `[Page Webhook] Detected Instagram DM (recipient: ${recipientId})`,
               );
@@ -2212,6 +2445,7 @@ export class FacebookService {
     );
     for (const entry of body.entry || []) {
       const igAccountId = entry.id;
+      this.markInstagramWebhook(igAccountId);
       this.logger.log(
         `[IG Webhook] Entry ID: ${igAccountId}, messaging events: ${entry.messaging?.length || 0}`,
       );
@@ -3575,6 +3809,7 @@ export class FacebookService {
 
   async syncInstagramMessages(
     tenantId: string,
+    opts: { since?: Date } = {},
   ): Promise<{ newConversations: number; newMessages: number }> {
     const result = { newConversations: 0, newMessages: 0 };
 
@@ -3606,7 +3841,7 @@ export class FacebookService {
 
       try {
         // GET /{page-id}/conversations?platform=instagram
-        const convUrl = `${this.graphApiUrl}/${fbAccount.pageId}/conversations?platform=instagram&fields=id,updated_time,participants&access_token=${fbAccount.accessToken}`;
+        const convUrl = `${this.graphApiUrl}/${fbAccount.pageId}/conversations?platform=instagram&limit=50&fields=id,updated_time,participants&access_token=${fbAccount.accessToken}`;
         const convResp = await fetch(convUrl);
         const convData = (await convResp.json()) as any;
 
@@ -3624,6 +3859,14 @@ export class FacebookService {
 
         for (const conv of conversations) {
           const convId = conv.id;
+          // Background polling only looks at threads that moved since the last run
+          if (
+            opts.since &&
+            conv.updated_time &&
+            new Date(conv.updated_time).getTime() < opts.since.getTime()
+          ) {
+            continue;
+          }
           const participants = conv.participants?.data || [];
           // The sender is the participant that's not our IG account
           const sender = participants.find(
@@ -3715,6 +3958,16 @@ export class FacebookService {
           // Messages are in reverse chronological order, process oldest first
           for (const msg of messages.reverse()) {
             const msgId = msg.id;
+
+            // Already stored: skip the extra Graph call (keeps frequent polling cheap)
+            if (
+              await this.messageModel.exists({
+                tenantId: new Types.ObjectId(tenantId),
+                'metadata.externalId': msgId,
+              })
+            ) {
+              continue;
+            }
 
             // Fetch message details first (needed for from.id = IGSID)
             const detailUrl = `${this.graphApiUrl}/${msgId}?fields=from,created_time,message,attachments&access_token=${fbAccount.accessToken}`;
@@ -3854,17 +4107,32 @@ export class FacebookService {
             }
 
             // Emit real-time events (same as handleIncomingMessage)
-            this.eventsGateway.emitMessageReceived(
-              tenantId,
-              conversation._id.toString(),
-              messageObj,
-              contact,
-            );
-            this.eventsGateway.emitToConversation(
-              conversation._id.toString(),
-              'message.new',
-              messageObj,
-            );
+            if (isFromUs) {
+              this.eventsGateway.emitToConversation(
+                conversation._id.toString(),
+                'message.new',
+                messageObj,
+              );
+            } else {
+              // Inbound: notify exactly like the webhook would (bell, sound, automations)
+              this.eventsGateway.emitMessageReceived(
+                tenantId,
+                conversation._id.toString(),
+                messageObj,
+                contact,
+              );
+              this.bus.emit(AUTOMATION_EVENT, {
+                trigger: AutomationTrigger.MESSAGE_RECEIVED,
+                tenantId,
+                workspaceId: (conversation as any).workspaceId
+                  ? String((conversation as any).workspaceId)
+                  : undefined,
+                conversationId: String(conversation._id),
+                contactId: String(contact._id),
+                channel: 'instagram',
+                text: type === 'text' ? content : '',
+              } as AutomationEventPayload);
+            }
           }
         }
       } catch (e: any) {

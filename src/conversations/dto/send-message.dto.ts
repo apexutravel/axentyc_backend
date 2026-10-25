@@ -8,6 +8,12 @@ export class SendMessageDto {
   @IsNotEmpty()
   content: string;
 
+  /** Sent by the web app on every scoped request; the controller reads it, it is never stored. */
+  @ApiPropertyOptional()
+  @IsString()
+  @IsOptional()
+  workspaceId?: string;
+
   @ApiPropertyOptional({ enum: MessageType })
   @IsEnum(MessageType)
   @IsOptional()

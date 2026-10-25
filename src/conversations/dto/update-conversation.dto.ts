@@ -3,6 +3,12 @@ import { ApiPropertyOptional } from '@nestjs/swagger';
 import { ConversationStatus } from '../entities/conversation.entity';
 
 export class UpdateConversationDto {
+  /** Sent by the web app on every scoped request; the controller reads it, it is never stored. */
+  @ApiPropertyOptional()
+  @IsString()
+  @IsOptional()
+  workspaceId?: string;
+
   @ApiPropertyOptional()
   @IsString()
   @IsOptional()

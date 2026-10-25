@@ -69,9 +69,12 @@ export class ConversationsController {
   async update(
     @CurrentUser() user: any,
     @Param('id') id: string,
-    @Body() dto: UpdateConversationDto,
-    @Query('workspaceId') workspaceId?: string,
+    @Body() body: UpdateConversationDto,
+    @Query('workspaceId') queryWorkspaceId?: string,
   ) {
+    // workspaceId only scopes the request: it must never reach the $set of the conversation
+    const { workspaceId: bodyWorkspaceId, ...dto } = body;
+    const workspaceId = queryWorkspaceId || bodyWorkspaceId;
     await this.membershipsService.assertCanAccessWorkspace(user.tenantId, user._id || user.sub, workspaceId);
     return this.conversationsService.update(user.tenantId, id, dto, workspaceId);
   }
@@ -81,9 +84,11 @@ export class ConversationsController {
   async sendMessage(
     @CurrentUser() user: any,
     @Param('id') id: string,
-    @Body() dto: SendMessageDto,
-    @Query('workspaceId') workspaceId?: string,
+    @Body() body: SendMessageDto,
+    @Query('workspaceId') queryWorkspaceId?: string,
   ) {
+    const { workspaceId: bodyWorkspaceId, ...dto } = body;
+    const workspaceId = queryWorkspaceId || bodyWorkspaceId;
     await this.membershipsService.assertCanAccessWorkspace(user.tenantId, user._id || user.sub, workspaceId);
     return this.conversationsService.sendMessage(
       user.tenantId,
