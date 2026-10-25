@@ -8,6 +8,7 @@ import {
   BadRequestException,
   NotFoundException,
   ConflictException,
+  OnModuleInit,
 } from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { InjectModel } from '@nestjs/mongoose';
@@ -49,7 +50,7 @@ import { BillingService } from '../billing/billing.service';
 import { createHmac, randomUUID, timingSafeEqual } from 'crypto';
 
 @Injectable()
-export class FacebookService {
+export class FacebookService implements OnModuleInit {
   private readonly logger = new Logger(FacebookService.name);
   private readonly pendingPageSelections = new Map<
     string,
@@ -186,22 +187,37 @@ export class FacebookService {
       .catch(() => undefined);
   }
 
-  @Cron('*/1 * * * *')
+  private igTick = 0;
+
+  /**
+   * Safety net behind the webhook. While Meta is not delivering Instagram events it runs every 20s;
+   * once webhooks are flowing (an event in the last 10 min) it drops to once a minute.
+   */
+  @Cron('*/20 * * * * *')
   async autoSyncInstagram() {
     if (this.configService.get<string>('META_POLLING_ENABLED') === 'false') return;
     if (this.igPolling) return;
     this.igPolling = true;
+    const tick = this.igTick++;
     try {
       const accounts = await this.socialAccountModel
         .find({
           platform: SocialPlatform.INSTAGRAM,
           status: SocialAccountStatus.CONNECTED,
         })
-        .select('tenantId')
+        .select('tenantId accountId')
         .lean();
-      const tenants = [...new Set(accounts.map((a) => String(a.tenantId)))];
+      const byTenant = new Map<string, string[]>();
+      for (const a of accounts) {
+        const key = String(a.tenantId);
+        byTenant.set(key, [...(byTenant.get(key) || []), String(a.accountId)]);
+      }
 
-      for (const tenantId of tenants) {
+      for (const [tenantId, igIds] of byTenant) {
+        const webhookHealthy = igIds.some(
+          (id) => Date.now() - (this.igWebhookMarked.get(id) || 0) < 10 * 60 * 1000,
+        );
+        if (webhookHealthy && tick % 3 !== 0) continue;
         const startedAt = Date.now();
         // First run after a restart looks back 24h; afterwards only what changed since the last pass
         const last = this.igLastPoll.get(tenantId) ?? Date.now() - 24 * 3600 * 1000;
@@ -1074,11 +1090,153 @@ export class FacebookService {
     }
   }
 
+  // ─── Meta app webhooks (object "instagram") ───
+
+  /**
+   * Meta delivers Page events (Messenger) and Instagram events through two separate webhook objects of the
+   * app. Connecting a page only subscribes the account; without an "instagram" webhook on the app Meta has
+   * nowhere to send Instagram messages, read receipts or comments, and only the polling safety net works.
+   */
+  /** Events each connected Instagram account is subscribed to (Send API / webhooks of the account). */
+  static readonly INSTAGRAM_ACCOUNT_FIELDS = [
+    'messages',
+    'messaging_postbacks',
+    'messaging_seen',
+    'comments',
+    'mentions',
+    'message_reactions',
+    'message_edit',
+  ];
+
+  static readonly INSTAGRAM_APP_FIELDS = [
+    'messages',
+    'messaging_seen',
+    'messaging_postbacks',
+    'message_reactions',
+    'comments',
+  ];
+
+  private async readAppSubscriptions(): Promise<{
+    appId: string;
+    appToken: string;
+    verifyToken: string;
+    subscriptions: any[];
+  }> {
+    const cfg = this.getGlobalAppConfig();
+    if (!cfg) throw new Error('FACEBOOK_APP_ID / FACEBOOK_APP_SECRET no están configurados');
+    const appToken = `${cfg.appId}|${cfg.appSecret}`;
+    const resp = await fetch(
+      `${this.graphApiUrl}/${cfg.appId}/subscriptions?access_token=${encodeURIComponent(appToken)}`,
+    );
+    const data = (await resp.json().catch(() => ({}))) as any;
+    if (data?.error) throw new Error(data.error.message || 'Meta rechazó la consulta de webhooks');
+    return {
+      appId: cfg.appId,
+      appToken,
+      verifyToken: cfg.verifyToken,
+      subscriptions: Array.isArray(data?.data) ? data.data : [],
+    };
+  }
+
+  /** Read-only: what the Meta app is set to receive for Instagram. */
+  async getInstagramAppWebhookStatus(): Promise<{
+    configured: boolean;
+    fields: string[];
+    missing: string[];
+    callbackUrl?: string;
+    error?: string;
+  }> {
+    const required = FacebookService.INSTAGRAM_APP_FIELDS;
+    try {
+      const { subscriptions } = await this.readAppSubscriptions();
+      const ig = subscriptions.find((x) => x.object === 'instagram');
+      const fields: string[] = (ig?.fields || []).map((f: any) => f.name);
+      const missing = required.filter((f) => !fields.includes(f));
+      return {
+        configured: !!ig && ig.active !== false && missing.length === 0,
+        fields,
+        missing,
+        callbackUrl: ig?.callback_url,
+      };
+    } catch (e: any) {
+      return { configured: false, fields: [], missing: required, error: e?.message || String(e) };
+    }
+  }
+
+  /**
+   * Makes sure the app has an active "instagram" webhook with the fields we need. Additive and idempotent:
+   * existing fields are kept, nothing is removed, and it does nothing when everything is already set.
+   */
+  async ensureInstagramAppWebhook(): Promise<{
+    status: 'ok' | 'created' | 'updated' | 'error';
+    message: string;
+    fields?: string[];
+  }> {
+    const required = FacebookService.INSTAGRAM_APP_FIELDS;
+    try {
+      const { appId, appToken, verifyToken, subscriptions } = await this.readAppSubscriptions();
+      if (!verifyToken) {
+        return { status: 'error', message: 'FACEBOOK_VERIFY_TOKEN no está configurado en el servidor' };
+      }
+      const ig = subscriptions.find((x) => x.object === 'instagram');
+      const page = subscriptions.find((x) => x.object === 'page');
+      const current: string[] = (ig?.fields || []).map((f: any) => f.name);
+      const missing = required.filter((f) => !current.includes(f));
+      if (ig && ig.active !== false && missing.length === 0) {
+        return { status: 'ok', message: 'El webhook de Instagram ya estaba configurado', fields: current };
+      }
+
+      const prefix = this.configService.get<string>('API_PREFIX') || 'api/v1';
+      const base = (
+        this.configService.get<string>('BACKEND_URL') ||
+        this.configService.get<string>('API_URL') ||
+        ''
+      ).replace(/\/+$/, '');
+      // Reuse the URL that already works for Messenger so both objects point to the same endpoint
+      const callbackUrl = ig?.callback_url || page?.callback_url || (base ? `${base}/${prefix}/webhook/facebook` : '');
+      if (!callbackUrl) {
+        return { status: 'error', message: 'No se pudo determinar la URL pública del webhook (BACKEND_URL)' };
+      }
+
+      const fields = [...new Set([...current, ...required])];
+      const resp = await fetch(`${this.graphApiUrl}/${appId}/subscriptions`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams({
+          object: 'instagram',
+          callback_url: callbackUrl,
+          fields: fields.join(','),
+          verify_token: verifyToken,
+          access_token: appToken,
+        }).toString(),
+      });
+      const data = (await resp.json().catch(() => ({}))) as any;
+      if (data?.error || data?.success === false) {
+        const reason = data?.error?.message || 'Meta rechazó la configuración';
+        this.logger.warn(`[Meta] Could not configure the Instagram webhook: ${reason}`);
+        return { status: 'error', message: reason };
+      }
+      this.logger.log(`[Meta] Instagram webhook ${ig ? 'updated' : 'created'}: ${fields.join(', ')}`);
+      return {
+        status: ig ? 'updated' : 'created',
+        message: ig ? 'Webhook de Instagram actualizado' : 'Webhook de Instagram creado',
+        fields,
+      };
+    } catch (e: any) {
+      return { status: 'error', message: e?.message || String(e) };
+    }
+  }
+
   /** What the UI needs to tell the user whether Instagram will really receive events. */
   async getInstagramLinkStatus(
     tenantId: string,
     instagramAccountId?: string,
-  ): Promise<{ linked: boolean; webhookSubscribed?: boolean; webhookError?: string | null }> {
+  ): Promise<{
+    linked: boolean;
+    webhookSubscribed?: boolean;
+    webhookError?: string | null;
+    appWebhook?: { status: string; message: string } | null;
+  }> {
     if (!instagramAccountId) return { linked: false };
     const ig = await this.socialAccountModel
       .findOne({
@@ -1094,6 +1252,112 @@ export class FacebookService {
       linked: true,
       webhookSubscribed: ig.metadata?.webhookSubscribed !== false,
       webhookError: ig.metadata?.webhookError ?? null,
+      appWebhook: ig.metadata?.appWebhook ?? null,
+    };
+  }
+
+  private realtimeChecking = false;
+
+  onModuleInit() {
+    if (this.configService.get<string>('META_AUTOHEAL_ENABLED') === 'false') return;
+    // Do not block start-up: give the server a moment, then make sure Instagram is wired to push events
+    setTimeout(() => {
+      this.ensureInstagramRealtime().catch((e) =>
+        this.logger.warn(`[Meta Auto-Heal] ${e?.message || e}`),
+      );
+    }, 15_000);
+  }
+
+  /** Real time must not depend on anyone pressing a button: re-verify it every hour. */
+  @Cron('0 * * * *')
+  async autoHealInstagramRealtime() {
+    if (this.configService.get<string>('META_AUTOHEAL_ENABLED') === 'false') return;
+    await this.ensureInstagramRealtime().catch((e) =>
+      this.logger.warn(`[Meta Auto-Heal] ${e?.message || e}`),
+    );
+  }
+
+  /**
+   * Makes Instagram push events to us: the app-level webhook, plus each account's own subscription
+   * (only re-subscribes what is missing). Idempotent and additive. The outcome is stored on each account so
+   * the UI only warns when something is genuinely wrong.
+   */
+  async ensureInstagramRealtime(): Promise<{
+    checked: number;
+    fixed: number;
+    failed: number;
+    appWebhook?: { status: string; message: string };
+  }> {
+    if (this.realtimeChecking) return { checked: 0, fixed: 0, failed: 0 };
+    this.realtimeChecking = true;
+    try {
+      const igAccounts = await this.socialAccountModel.find({
+        platform: SocialPlatform.INSTAGRAM,
+        status: SocialAccountStatus.CONNECTED,
+      });
+      if (igAccounts.length === 0) return { checked: 0, fixed: 0, failed: 0 };
+
+      const app = await this.ensureInstagramAppWebhook();
+      const appError = app.status === 'error' ? app.message : null;
+      let fixed = app.status === 'created' || app.status === 'updated' ? 1 : 0;
+      let failed = 0;
+
+      for (const ig of igAccounts) {
+        let accountError: string | null = null;
+        try {
+          const fb = await this.socialAccountModel.findOne({
+            tenantId: ig.tenantId,
+            platform: SocialPlatform.FACEBOOK,
+            pageId: ig.pageId,
+            status: SocialAccountStatus.CONNECTED,
+          });
+          const token = fb?.accessToken || ig.accessToken;
+          if (!ig.accountId || !token) throw new Error('Falta el token de la página vinculada');
+
+          const resp = await fetch(
+            `${this.graphApiUrl}/${ig.accountId}/subscribed_apps?access_token=${encodeURIComponent(token)}`,
+          );
+          const data = (await resp.json().catch(() => ({}))) as any;
+          if (data?.error) throw new Error(data.error.message || 'Meta rechazó la consulta');
+          const have: string[] = (data?.data || []).flatMap((a: any) => a.subscribed_fields || []);
+          const missing = FacebookService.INSTAGRAM_ACCOUNT_FIELDS.filter((f) => !have.includes(f));
+          if (missing.length > 0) {
+            await this.subscribeInstagramToWebhook(ig.accountId, token);
+            fixed++;
+            this.logger.log(`[Meta Auto-Heal] @${ig.accountName} re-subscribed (missing: ${missing.join(', ')})`);
+          }
+        } catch (e: any) {
+          accountError = e?.message || String(e);
+          failed++;
+          this.logger.warn(`[Meta Auto-Heal] @${ig.accountName}: ${accountError}`);
+        }
+
+        const error = accountError || appError;
+        await this.socialAccountModel
+          .updateOne(
+            { _id: ig._id },
+            {
+              $set: {
+                'metadata.realtime': { ok: !error, error, checkedAt: new Date() },
+                'metadata.webhookSubscribed': !accountError,
+                'metadata.webhookError': accountError,
+              },
+            },
+          )
+          .catch(() => undefined);
+      }
+      return { checked: igAccounts.length, fixed, failed, appWebhook: { status: app.status, message: app.message } };
+    } finally {
+      this.realtimeChecking = false;
+    }
+  }
+
+  /** Manual fallback for the rare case where Meta keeps refusing (shown only when something is wrong). */
+  async repairInstagramRealtime(tenantId: string) {
+    const result = await this.ensureInstagramRealtime();
+    return {
+      appWebhook: result.appWebhook ?? { status: 'ok', message: 'Sin cuentas de Instagram conectadas' },
+      accounts: { checked: result.checked, fixed: result.fixed, failed: result.failed },
     };
   }
 
@@ -1747,6 +2011,7 @@ export class FacebookService {
 
     // Check if page has Instagram linked
     let igWebhookError: string | undefined;
+    let igAppWebhook: { status: string; message: string } | undefined;
     if (instagramAccount?.id) {
       this.logger.log(
         `Instagram account @${instagramAccount.username} detected for page ${pageId}`,
@@ -1763,6 +2028,9 @@ export class FacebookService {
           `Instagram webhook subscription failed for @${instagramAccount.username}: ${igWebhookError}. Facebook page will still be connected.`,
         );
       }
+      // The account subscription alone delivers nothing: the app needs an "instagram" webhook object too
+      const ensured = await this.ensureInstagramAppWebhook();
+      igAppWebhook = { status: ensured.status, message: ensured.message };
     }
 
     // Upsert Facebook page account
@@ -1826,6 +2094,7 @@ export class FacebookService {
             // Surfaced in the UI: a "connected" account with no webhook never receives events
             webhookSubscribed: !igWebhookError,
             webhookError: igWebhookError || null,
+            appWebhook: igAppWebhook ? { ...igAppWebhook, checkedAt: new Date() } : undefined,
           },
           isActive: true,
         },
@@ -1834,6 +2103,8 @@ export class FacebookService {
       this.logger.log(
         `Instagram account @${instagramAccount.username} connected for tenant ${tenantId}`,
       );
+      // Record whether real time is really wired (the UI only warns when this says otherwise)
+      void this.ensureInstagramRealtime().catch(() => undefined);
     }
 
     this.logger.log(
@@ -2025,7 +2296,9 @@ export class FacebookService {
       });
     }
 
+    const appWebhook = await this.getInstagramAppWebhookStatus();
     return {
+      appWebhook,
       instagramConnected: igAccounts.some(
         (a) => a.status === SocialAccountStatus.CONNECTED,
       ),
@@ -2277,15 +2550,7 @@ export class FacebookService {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         access_token: pageAccessToken,
-        subscribed_fields: [
-          'messages',
-          'messaging_postbacks',
-          'messaging_seen',
-          'comments',
-          'mentions',
-          'message_reactions',
-          'message_edit',
-        ],
+        subscribed_fields: FacebookService.INSTAGRAM_ACCOUNT_FIELDS,
       }),
     });
 
@@ -3181,6 +3446,16 @@ export class FacebookService {
       this.logger.warn(
         `No connected Instagram account found for ${igAccountId}`,
       );
+      return;
+    }
+
+    // Meta identifies the commenter with an app-scoped id, so "is it us?" cannot rely on the account id alone
+    const isOwnComment =
+      (!!from.self_ig_scoped_id && String(from.self_ig_scoped_id) === String(commenterId)) ||
+      (!!from.username &&
+        from.username.toLowerCase() === (account.accountName || '').toLowerCase());
+    if (isOwnComment) {
+      this.logger.debug(`[IG Comment] Ignoring own account comment ${commentId}`);
       return;
     }
 

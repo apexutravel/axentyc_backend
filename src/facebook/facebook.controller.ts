@@ -587,6 +587,16 @@ export class FacebookController {
     return { success: true, ...result };
   }
 
+  @Post('integrations/instagram/repair-webhooks')
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary: 'Make Instagram arrive in real time: ensure the app webhook and re-subscribe the accounts',
+  })
+  async repairInstagramRealtime(@CurrentUser() user: any) {
+    await this.assertCanManage(user);
+    return this.facebookService.repairInstagramRealtime(user.tenantId);
+  }
+
   @Post('integrations/instagram/resubscribe-webhook')
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Re-subscribe Instagram account to webhooks' })

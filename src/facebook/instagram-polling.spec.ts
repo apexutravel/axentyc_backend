@@ -144,3 +144,36 @@ describe('Instagram polling safety net', () => {
     expect(off.service.socialAccountModel.find).not.toHaveBeenCalled();
   });
 });
+
+describe('Instagram webhook comments written by our own account', () => {
+  const account: any = { tenantId: new Types.ObjectId(), accountId: 'ig-1', accountName: 'MiTienda' };
+  const build = () => {
+    const messageModel: any = jest.fn();
+    messageModel.exists = jest.fn().mockResolvedValue(null);
+    const socialAccountModel: any = { findOne: jest.fn().mockResolvedValue(account) };
+    const service: any = new FacebookService(
+      socialAccountModel, {} as any, {} as any, messageModel, {} as any,
+      { get: () => undefined } as any, {} as any, {} as any, { emit: jest.fn() } as any,
+    );
+    return { service, messageModel };
+  };
+  const value = (from: any) => ({ id: 'c1', text: 'Gracias!', from, media: { id: 'm1' } });
+
+  it.each([
+    ['by the app-scoped id', { id: 'scoped-9', username: 'otro', self_ig_scoped_id: 'scoped-9' }],
+    ['by the username', { id: 'scoped-9', username: 'mitienda' }],
+    ['by the account id', { id: 'ig-1', username: 'x' }],
+  ])('ignores it (%s) so our own replies never become customer messages', async (_label, from) => {
+    const { service, messageModel } = build();
+    await service.handleInstagramComment('ig-1', value(from));
+    expect(messageModel).not.toHaveBeenCalled();
+    expect(messageModel.exists).not.toHaveBeenCalled();
+  });
+
+  it('still processes a real customer comment', async () => {
+    const { service, messageModel } = build();
+    service.getOrCreateContact = jest.fn().mockRejectedValue(new Error('reached contact creation'));
+    await expect(service.handleInstagramComment('ig-1', value({ id: 'scoped-5', username: 'rosa', self_ig_scoped_id: 'scoped-9' }))).rejects.toThrow('reached contact creation');
+    expect(messageModel.exists).toHaveBeenCalled();
+  });
+});
