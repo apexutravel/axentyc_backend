@@ -13,6 +13,7 @@ import { ConversationsService } from './conversations.service';
 import { CreateConversationDto } from './dto/create-conversation.dto';
 import { UpdateConversationDto } from './dto/update-conversation.dto';
 import { SendMessageDto } from './dto/send-message.dto';
+import { TypingDto } from './dto/typing.dto';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { MembershipsService } from '../memberships/memberships.service';
 
@@ -118,6 +119,19 @@ export class ConversationsController {
       limit ? parseInt(limit) : 50,
       workspaceId,
     );
+  }
+
+  @Post(':id/typing')
+  @ApiOperation({ summary: 'The agent is typing (shown to Messenger / Instagram customers)' })
+  async typing(
+    @CurrentUser() user: any,
+    @Param('id') id: string,
+    @Body() body: TypingDto,
+    @Query('workspaceId') queryWorkspaceId?: string,
+  ) {
+    const workspaceId = queryWorkspaceId || body.workspaceId;
+    await this.membershipsService.assertCanAccessWorkspace(user.tenantId, user._id || user.sub, workspaceId);
+    return this.conversationsService.setAgentTyping(user.tenantId, id, !!body.isTyping, workspaceId);
   }
 
   @Post(':id/read')

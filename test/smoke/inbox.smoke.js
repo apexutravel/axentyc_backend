@@ -42,5 +42,17 @@ run('INBOX: reply to a conversation with the web-app request shape', async ({ ok
   r = await asAgent(`/conversations/${conv._id}/messages?workspaceId=${W}`, { workspaceId: W, content: 'x', hack: 'no' });
   ok(r.status === 400, 'unknown fields are still rejected', r.status);
 
+  // "Escribiendo..." for Messenger / Instagram customers: cosmetic, must never error out for the agent
+  r = await call('POST', `/conversations/${conv._id}/typing`, { isTyping: true });
+  ok(r.status === 201 && r.data.success === true, 'typing on a web chat is accepted (nothing is sent to Meta)', r.json);
+  r = await call('POST', '/conversations', { channel: 'instagram', contactId: contact._id, subject: 'IG', metadata: { externalId: 'igsid-1', accountId: 'no-such-account' } });
+  const ig = r.data;
+  r = await call('POST', `/conversations/${ig._id}/typing`, { isTyping: true });
+  ok(r.status === 201 && r.data.success === true, 'typing on an Instagram thread without a connected account does not fail', r.json);
+  r = await call('POST', `/conversations/${ig._id}/typing`, { isTyping: 'yes' });
+  ok(r.status === 400, 'typing needs a boolean', r.status);
+  r = await asAgent(`/conversations/${conv._id}/typing`, { workspaceId: W, isTyping: false });
+  ok(r.status === 201, 'agent can send typing with the workspace in the body', r.json);
+
   await db.collection('users').deleteOne({ _id: agentId });
 });

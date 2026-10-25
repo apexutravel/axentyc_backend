@@ -272,11 +272,21 @@ export class ConversationsService {
     const conversationQuery: any = { _id: conversationId, tenantId: new Types.ObjectId(tenantId) };
     if (workspaceId) conversationQuery.workspaceId = new Types.ObjectId(workspaceId);
 
+    const before = await this.conversationModel.findOne(conversationQuery).select('unreadCount channel').lean();
     const conversation = await this.conversationModel.findOneAndUpdate(
       conversationQuery,
       { unreadCount: 0 },
       { returnDocument: 'after' },
     );
+
+    // An agent really looked at it: the customer sees "Visto" in Messenger / Instagram
+    if (
+      before?.unreadCount &&
+      (conversation?.channel === 'facebook' || conversation?.channel === 'instagram') &&
+      !conversation.metadata?.isComment
+    ) {
+      void this.facebookService.sendSenderAction(tenantId, conversationId, 'mark_seen');
+    }
 
     const result = await this.messageModel.updateMany(
       {
@@ -302,6 +312,27 @@ export class ConversationsService {
     if (conversation) {
       this.eventsGateway.emitConversationUpdated(tenantId, conversation);
     }
+  }
+
+  /** Shows "escribiendo..." to a Messenger / Instagram customer while the agent types. */
+  async setAgentTyping(
+    tenantId: string,
+    conversationId: string,
+    isTyping: boolean,
+    workspaceId?: string,
+  ): Promise<{ success: boolean }> {
+    const conversation = await this.findOne(tenantId, conversationId, workspaceId);
+    if (
+      (conversation.channel === 'facebook' || conversation.channel === 'instagram') &&
+      !conversation.metadata?.isComment
+    ) {
+      void this.facebookService.sendSenderAction(
+        tenantId,
+        conversationId,
+        isTyping ? 'typing_on' : 'typing_off',
+      );
+    }
+    return { success: true };
   }
 
   async markOutboundAsRead(conversationId: string): Promise<number> {

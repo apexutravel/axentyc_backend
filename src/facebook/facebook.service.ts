@@ -2280,6 +2280,7 @@ export class FacebookService {
         subscribed_fields: [
           'messages',
           'messaging_postbacks',
+          'messaging_seen',
           'comments',
           'mentions',
           'message_reactions',
@@ -2401,7 +2402,13 @@ export class FacebookService {
               isIgEcho ? 'instagram' : 'facebook',
             );
           } else if (event.read) {
-            await this.handleMessageRead(pageId, event);
+            const isIgRead =
+              !!igAccount && event.recipient?.id === igAccount.accountId;
+            await this.handleMessageRead(
+              isIgRead ? String(igAccount!.accountId) : pageId,
+              event,
+              isIgRead ? 'instagram' : 'facebook',
+            );
           } else if (event.delivery) {
             this.logger.debug('Message delivered');
           } else if (event.postback) {
@@ -2505,7 +2512,7 @@ export class FacebookService {
           } else if (event.message?.is_echo) {
             await this.handleIncomingMessage(igAccountId, event, 'instagram');
           } else if (event.read) {
-            await this.handleMessageRead(igAccountId, event);
+            await this.handleMessageRead(igAccountId, event, 'instagram');
           }
         } catch (err) {
           this.logger.error(
@@ -2816,9 +2823,88 @@ export class FacebookService {
     );
   }
 
-  private async handleMessageRead(pageId: string, event: any): Promise<void> {
-    // Could update message statuses to 'read'
-    this.logger.debug(`Messages read by user ${event.sender?.id}`);
+  /**
+   * The customer opened our messages. Messenger sends a watermark (everything up to that time was read),
+   * Instagram sends the id of the last message seen. Marks our outbound messages as read and tells the UI.
+   */
+  private async handleMessageRead(
+    accountKey: string,
+    event: any,
+    platform: 'facebook' | 'instagram',
+  ): Promise<void> {
+    const userId = event?.sender?.id;
+    if (!userId || !event?.read) return;
+
+    const account = await this.socialAccountModel.findOne({
+      $or:
+        platform === 'instagram'
+          ? [
+              { accountId: accountKey, platform: SocialPlatform.INSTAGRAM },
+              { pageId: accountKey, platform: SocialPlatform.INSTAGRAM },
+            ]
+          : [{ pageId: accountKey, platform: SocialPlatform.FACEBOOK }],
+      status: SocialAccountStatus.CONNECTED,
+    });
+    if (!account) return;
+
+    const tenantId = account.tenantId.toString();
+    const owners: any[] = [];
+    if (account.pageId) owners.push({ 'metadata.pageId': account.pageId });
+    if (account.accountId) owners.push({ 'metadata.accountId': account.accountId });
+    const conversation = await this.conversationModel.findOne({
+      tenantId: account.tenantId,
+      channel:
+        platform === 'instagram'
+          ? ConversationChannel.INSTAGRAM
+          : ConversationChannel.FACEBOOK,
+      'metadata.externalId': userId,
+      'metadata.isComment': { $ne: true },
+      ...(owners.length ? { $or: owners } : {}),
+    });
+    if (!conversation) return;
+
+    const toDate = (raw: any): Date | undefined => {
+      const n = Number(raw);
+      if (!Number.isFinite(n) || n <= 0) return undefined;
+      return new Date(n < 1e11 ? n * 1000 : n); // tolerate seconds
+    };
+    let readUpTo = toDate(event.read.watermark);
+    if (!readUpTo && event.read.mid) {
+      const seen = await this.messageModel
+        .findOne({
+          tenantId: account.tenantId,
+          conversationId: conversation._id,
+          'metadata.externalId': event.read.mid,
+        })
+        .select('createdAt')
+        .lean();
+      readUpTo = (seen as any)?.createdAt;
+    }
+    readUpTo = readUpTo || toDate(event.timestamp) || new Date();
+
+    const result = await this.messageModel.updateMany(
+      {
+        tenantId: account.tenantId,
+        conversationId: conversation._id,
+        direction: MessageDirection.OUTBOUND,
+        status: { $in: [MessageStatus.SENT, MessageStatus.DELIVERED] },
+        createdAt: { $lte: readUpTo },
+      },
+      { $set: { status: MessageStatus.READ } },
+    );
+    if (!result.modifiedCount) return;
+
+    const payload = {
+      conversationId: String(conversation._id),
+      status: 'read',
+      readUpTo: readUpTo.toISOString(),
+    };
+    this.eventsGateway.emitToTenant(tenantId, 'message.status.updated', payload);
+    this.eventsGateway.emitToConversation(
+      String(conversation._id),
+      'message.status.updated',
+      payload,
+    );
   }
 
   private async handlePostback(pageId: string, event: any): Promise<void> {
@@ -3212,38 +3298,36 @@ export class FacebookService {
 
   // ─── Send Message ───
 
-  async sendMessage(
+  /** Conversation + connected Meta account needed to talk to a customer through the Send API. */
+  private async resolveMetaThread(
     tenantId: string,
     conversationId: string,
-    content: string,
-    media?: { url: string; mimeType?: string },
-  ): Promise<boolean> {
-    // Find the conversation to get the sender PSID
+  ): Promise<{
+    conversation: ConversationDocument;
+    account: SocialAccountDocument;
+    externalId: string;
+    isInstagram: boolean;
+  } | null> {
     const conversation = await this.conversationModel.findOne({
       _id: new Types.ObjectId(conversationId),
       tenantId: new Types.ObjectId(tenantId),
     });
-    if (!conversation) {
-      return false;
-    }
+    if (!conversation) return null;
 
     const isFacebook = conversation.channel === ConversationChannel.FACEBOOK;
     const isInstagram = conversation.channel === ConversationChannel.INSTAGRAM;
-    if (!isFacebook && !isInstagram) {
-      return false;
-    }
+    if (!isFacebook && !isInstagram) return null;
 
-    const externalId = conversation.metadata?.externalId; // sender PSID
+    const externalId = conversation.metadata?.externalId; // sender PSID / IGSID
     const pageId = conversation.metadata?.pageId;
     const accountId = conversation.metadata?.accountId;
     if (!externalId || (!pageId && !accountId)) {
       this.logger.warn(
         `Missing externalId or pageId/accountId for conversation ${conversationId}`,
       );
-      return false;
+      return null;
     }
 
-    // Find the social account (Facebook page or Instagram account)
     const lookupId = pageId || accountId;
     const platformType = isInstagram
       ? SocialPlatform.INSTAGRAM
@@ -3256,13 +3340,59 @@ export class FacebookService {
       ],
       status: SocialAccountStatus.CONNECTED,
     });
-
     if (!account?.accessToken) {
       this.logger.warn(
         `No access token for ${isInstagram ? 'Instagram' : 'Facebook'} account ${lookupId}`,
       );
+      return null;
+    }
+    return { conversation, account, externalId, isInstagram };
+  }
+
+  /**
+   * "Escribiendo..." and "Visto" shown to the customer inside Messenger / Instagram.
+   * Never throws: these are cosmetic and Meta refuses them outside the 24h window or for comment threads.
+   */
+  async sendSenderAction(
+    tenantId: string,
+    conversationId: string,
+    action: 'typing_on' | 'typing_off' | 'mark_seen',
+  ): Promise<boolean> {
+    try {
+      const thread = await this.resolveMetaThread(tenantId, conversationId);
+      if (!thread || thread.conversation.metadata?.isComment) return false;
+      const response = await fetch(
+        `${this.graphApiUrl}/me/messages?access_token=${thread.account.accessToken}`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            recipient: { id: thread.externalId },
+            sender_action: action,
+          }),
+        },
+      );
+      const result = (await response.json().catch(() => ({}))) as any;
+      if (result?.error) {
+        this.logger.debug(`[SenderAction] ${action} refused: ${result.error.message}`);
+        return false;
+      }
+      return true;
+    } catch (e: any) {
+      this.logger.debug(`[SenderAction] ${action} failed: ${e?.message || e}`);
       return false;
     }
+  }
+
+  async sendMessage(
+    tenantId: string,
+    conversationId: string,
+    content: string,
+    media?: { url: string; mimeType?: string },
+  ): Promise<boolean> {
+    const thread = await this.resolveMetaThread(tenantId, conversationId);
+    if (!thread) return false;
+    const { account, externalId, isInstagram } = thread;
 
     // Build Graph API message (same endpoint for both FB and IG)
     const messagePayload: any = {
