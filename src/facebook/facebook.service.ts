@@ -1363,6 +1363,92 @@ export class FacebookService implements OnModuleInit {
 
   // ─── Instagram comments (live from the Graph API) ───
 
+  // ─── Exactly-once processing of Meta events ───
+
+  private metaClaimsReady?: Promise<void>;
+
+  private metaClaims() {
+    const col = this.messageModel.db.collection('meta_event_claims');
+    // One unique key per tenant and Meta message id; old claims expire by themselves.
+    this.metaClaimsReady ||= Promise.all([
+      col.createIndex({ tenantId: 1, key: 1 }, { unique: true }),
+      col.createIndex({ at: 1 }, { expireAfterSeconds: 7 * 24 * 3600 }),
+    ]).then(() => undefined);
+    return { col, ready: this.metaClaimsReady };
+  }
+
+  /** Atomically reserves a Meta message so simultaneous delivery paths cannot both process it. */
+  private async claimMetaEvent(
+    tenantId: string,
+    key: string,
+    staleMs = 90_000,
+  ): Promise<boolean> {
+    try {
+      const { col, ready } = this.metaClaims();
+      await ready;
+      const owner = new Types.ObjectId(tenantId);
+      try {
+        await col.insertOne({ tenantId: owner, key, at: new Date() });
+        return true;
+      } catch (e: any) {
+        if (e?.code !== 11000) throw e;
+        const taken = await col.updateOne(
+          { tenantId: owner, key, at: { $lt: new Date(Date.now() - staleMs) } },
+          { $set: { at: new Date() } },
+        );
+        return taken.modifiedCount === 1;
+      }
+    } catch (e: any) {
+      // Prefer a possible duplicate over losing a customer message if Mongo is temporarily unavailable.
+      this.logger.warn(`[Meta claim] unavailable, processing without it: ${e?.message || e}`);
+      return true;
+    }
+  }
+
+  /** Gives the claim back when processing failed so Meta or polling can retry it. */
+  private async releaseMetaEvent(tenantId: string, key: string): Promise<void> {
+    try {
+      await this.messageModel.db
+        .collection('meta_event_claims')
+        .deleteOne({ tenantId: new Types.ObjectId(tenantId), key });
+    } catch {
+      // The claim expires automatically.
+    }
+  }
+
+  /** Meta timestamps arrive in milliseconds, seconds, or ISO format. */
+  private metaDate(raw: any): Date | undefined {
+    if (raw === undefined || raw === null || raw === '') return undefined;
+    const n = Number(raw);
+    const d = Number.isFinite(n) && n > 0
+      ? new Date(n < 1e11 ? n * 1000 : n)
+      : new Date(raw);
+    return Number.isNaN(d.getTime()) ? undefined : d;
+  }
+
+  /** Handles the rare case where webhook and Graph API use different ids for the same message. */
+  private async hasTwinInbound(
+    tenantId: string,
+    conversationId: any,
+    content: string,
+    sentAt: Date | undefined,
+    storedBy: 'polling' | 'webhook',
+  ): Promise<boolean> {
+    if (!sentAt || !content) return false;
+    return !!(await this.messageModel.exists({
+      tenantId: new Types.ObjectId(tenantId),
+      conversationId,
+      direction: MessageDirection.INBOUND,
+      type: 'text',
+      content,
+      'metadata.sentAt': {
+        $gte: new Date(sentAt.getTime() - 3000),
+        $lte: new Date(sentAt.getTime() + 3000),
+      },
+      'metadata.polled': storedBy === 'polling' ? true : { $ne: true },
+    } as any));
+  }
+
   private async getConnectedInstagram(
     tenantId: string,
     accountId: string,
@@ -2902,8 +2988,15 @@ export class FacebookService implements OnModuleInit {
       return;
     }
 
-    // Deduplicate webhook retries / re-deliveries by message id
+    // The Page and Instagram webhooks can deliver the same event simultaneously.
+    const claimKey = message.mid ? `msg:${message.mid}` : undefined;
     if (message.mid) {
+      if (!(await this.claimMetaEvent(tenantId, claimKey!))) {
+        this.logger.debug(
+          `[handleIncomingMessage] Message ${message.mid} is already being handled, ignored`,
+        );
+        return;
+      }
       const alreadyStored = await this.messageModel.exists({
         tenantId: new Types.ObjectId(tenantId),
         'metadata.externalId': message.mid,
@@ -2915,6 +3008,36 @@ export class FacebookService implements OnModuleInit {
         return;
       }
     }
+
+    try {
+      await this.processIncomingMessage({
+        accountId,
+        event,
+        platform,
+        message,
+        isEcho,
+        senderId,
+        account,
+        tenantId,
+      });
+    } catch (e) {
+      if (claimKey) await this.releaseMetaEvent(tenantId, claimKey);
+      throw e;
+    }
+  }
+
+  private async processIncomingMessage(ctx: {
+    accountId: string;
+    event: any;
+    platform: 'facebook' | 'instagram';
+    message: any;
+    isEcho: boolean;
+    senderId: string;
+    account: any;
+    tenantId: string;
+  }): Promise<void> {
+    const { accountId, event, platform, message, isEcho, senderId, account, tenantId } = ctx;
+    const recipientId = isEcho ? event.sender?.id : event.recipient?.id;
 
     // Get or create contact
     this.logger.debug(
@@ -3008,6 +3131,18 @@ export class FacebookService implements OnModuleInit {
       }
     }
 
+    const sentAt = this.metaDate(event.timestamp);
+    if (
+      !isEcho &&
+      type === 'text' &&
+      (await this.hasTwinInbound(tenantId, conversation._id, content, sentAt, 'polling'))
+    ) {
+      this.logger.debug(
+        `[handleIncomingMessage] ${message.mid} matches a message already stored by polling, ignored`,
+      );
+      return;
+    }
+
     // Add message to conversation
     const newMessage = new this.messageModel({
       tenantId: new Types.ObjectId(tenantId),
@@ -3021,6 +3156,7 @@ export class FacebookService implements OnModuleInit {
       status: MessageStatus.SENT,
       metadata: {
         externalId: message.mid,
+        ...(sentAt ? { sentAt } : {}),
         platform,
         pageName: account.accountName,
         ...(isEcho ? { sentExternally: true } : {}),
@@ -4374,12 +4510,19 @@ export class FacebookService implements OnModuleInit {
               continue;
             }
 
+            // The webhook may be saving this message at the same time.
+            const claimKey = `msg:${msgId}`;
+            if (!(await this.claimMetaEvent(tenantId, claimKey))) continue;
+
             // Fetch message details first (needed for from.id = IGSID)
             const detailUrl = `${this.graphApiUrl}/${msgId}?fields=from,created_time,message,attachments&access_token=${fbAccount.accessToken}`;
             const detailResp = await fetch(detailUrl);
             const detail = (await detailResp.json()) as any;
 
-            if (detail.error) continue;
+            if (detail.error) {
+              await this.releaseMetaEvent(tenantId, claimKey);
+              continue;
+            }
 
             const isFromUs =
               detail.from?.id === igAccount.accountId ||
@@ -4464,6 +4607,15 @@ export class FacebookService implements OnModuleInit {
               }
             }
 
+            const sentAt = this.metaDate(detail.created_time);
+            if (
+              !isFromUs &&
+              type === 'text' &&
+              (await this.hasTwinInbound(tenantId, conversation._id, content, sentAt, 'webhook'))
+            ) {
+              continue;
+            }
+
             const newMessage = new this.messageModel({
               tenantId: new Types.ObjectId(tenantId),
               workspaceId: (conversation as any).workspaceId,
@@ -4483,6 +4635,8 @@ export class FacebookService implements OnModuleInit {
               metadata: {
                 externalId: msgId,
                 platform: 'instagram',
+                polled: true,
+                ...(sentAt ? { sentAt } : {}),
               },
             });
             const savedMessage = await newMessage.save();
